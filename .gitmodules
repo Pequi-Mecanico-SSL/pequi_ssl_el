@@ -1,0 +1,6 @@
+[submodule "src/rsim_ros"]
+	path = src/rsim_ros
+	url = git@github.com:Pequi-Mecanico-SSL/rsim_ros.git
+[submodule "src/latency_test"]
+	path = src/latency_test
+	url = git@github.com:Pequi-Mecanico-SSL/latency_test.git

@@ -1,0 +1,27 @@
+services:
+  ping:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ros2 run latency_test ping
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+  
+  pong:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ros2 run latency_test pong
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+  
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ros2 run rsim_ros simulator
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
