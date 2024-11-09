@@ -4,3 +4,6 @@
 [submodule "src/latency_test"]
 	path = src/latency_test
 	url = git@github.com:Pequi-Mecanico-SSL/latency_test.git
+[submodule "src/robot_control"]
+	path = src/robot_control
+	url = git@github.com:Pequi-Mecanico-SSL/robot_control.git

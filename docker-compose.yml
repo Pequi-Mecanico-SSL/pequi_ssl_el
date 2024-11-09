@@ -1,27 +1,48 @@
 services:
-  ping:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: ros2 run latency_test ping
-    network_mode: host
-    volumes:
-      - ./src:/ssl_ws/src:ro
+  # ping:
+  #   container_name: ssl_ping
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ros2 run latency_test ping
+  #   network_mode: host
+  #   volumes:
+  #     - ./src:/ssl_ws/src:ro
   
-  pong:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: ros2 run latency_test pong
-    network_mode: host
-    volumes:
-      - ./src:/ssl_ws/src:ro
+  # pong:
+  #   container_name: ssl_pong
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ros2 run latency_test pong
+  #   network_mode: host
+  #   volumes:
+  #     - ./src:/ssl_ws/src:ro
   
   simulator:
+    container_name: ssl_simulator
+    privileged: true
     build:
       context: .
       dockerfile: Dockerfile
-    command: ros2 run rsim_ros simulator
+    command: ros2 launch rsim_ros simulator_launch.yaml
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
+      - /dev/input:/dev/input:rw
+      - /dev/bus/usb:/dev/bus/usb:rw
+    environment:
+      - DISPLAY=:0.0
+      - SDL_AUDIODRIVER=dsp
+    # devices:
+    #   - /dev/input/js0:/dev/input/js0
+  
+  # control:
+  #   container_name: ssl_control
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ros2 run robot_control controller
+  #   network_mode: host
+  #   volumes:
+  #     - ./src:/ssl_ws/src:ro
