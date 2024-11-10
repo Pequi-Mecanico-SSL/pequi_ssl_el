@@ -7,3 +7,9 @@
 [submodule "src/robot_control"]
 	path = src/robot_control
 	url = git@github.com:Pequi-Mecanico-SSL/robot_control.git
+[submodule "src/px4_msgs"]
+	path = src/px4_msgs
+	url = https://github.com/PX4/px4_msgs.git
+[submodule "src/px4_ros_com"]
+	path = src/px4_ros_com
+	url = https://github.com/PX4/px4_ros_com.git

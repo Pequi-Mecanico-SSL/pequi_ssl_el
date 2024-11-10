@@ -22,18 +22,6 @@ To test communication latency, run `docker-compose run ping` on the computer and
 
 'sudo docker-compose run -ti --env="DISPLAY" simulator '
 
-inside the docker file, open another isntance in another terminal using docker exec:
+To start the px4_ros_com node:
 
-docker exec -it <your dockerfile names>
-
-Inside the new terminal run:
-
-source install/local_setup.bash
-
-This command is to initialize the px4 messages
-
-run:
-
- source /opt/ros/iron/setup.bash
-
-To start ros2
+'ros2 launch px4_ros_com sensor_combined_listener.launch.py'
