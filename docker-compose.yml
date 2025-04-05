@@ -9,31 +9,43 @@ services:
   #   volumes:
   #     - ./src:/ssl_ws/src:ro
   
-  # pong:
-  #   container_name: ssl_pong
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: ros2 run latency_test pong
-  #   network_mode: host
-  #   volumes:
-  #     - ./src:/ssl_ws/src:ro
-  
-  simulator:
-    container_name: ssl_simulator
-    privileged: true
+  pong:
+    container_name: ssl_pong
     build:
       context: .
-      dockerfile: Dockerfile
-    command: ros2 launch rsim_ros simulator_launch.yaml
+      dockerfile: Dockerfile.arm64
+    command: ros2 run latency_test pong
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
-      - /dev/input:/dev/input:rw
-      - /dev/bus/usb:/dev/bus/usb:rw
-    environment:
-      - DISPLAY=:0.0
-      - SDL_AUDIODRIVER=dsp
+
+  robot:
+    container_name: ssl_robot
+    privileged: true
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+    command: ros2 run robot_control stm32_bridge
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+      - /dev:/dev:rw
+  
+  # simulator:
+  #   container_name: ssl_simulator
+  #   privileged: true
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ros2 launch rsim_ros simulator_launch.yaml
+  #   network_mode: host
+  #   volumes:
+  #     - ./src:/ssl_ws/src:ro
+  #     - /dev/input:/dev/input:rw
+  #     - /dev/bus/usb:/dev/bus/usb:rw
+  #   environment:
+  #     - DISPLAY=:0.0
+  #     - SDL_AUDIODRIVER=dsp
     # devices:
     #   - /dev/input/js0:/dev/input/js0
   
