@@ -1,5 +1,4 @@
 FROM osrf/ros:iron-desktop
-# FROM arm64v8/ros:iron-ros-base - use this for raspberry pi
 
 SHELL ["/bin/bash", "-c"]
 
