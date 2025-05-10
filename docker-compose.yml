@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.arm64
-    command: ros2 run robot_control stm32_bridge
+    command: ros2 launch robot_control robot.yaml
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
