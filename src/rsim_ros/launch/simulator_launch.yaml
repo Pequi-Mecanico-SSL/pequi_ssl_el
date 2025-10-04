@@ -1,0 +1,141 @@
+launch:
+
+- arg:
+    name: "blue_robot_count"
+    default: "3"
+- arg:
+    name: "yellow_robot_count"
+    default: "3"
+- arg:
+    name: "frequency"
+    default: "60"
+
+- node:
+    pkg: "rsim_ros"
+    exec: "simulator"
+    name: "simulator"
+    param:
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: frequency
+        value: $(var frequency)
+
+- node:
+    pkg: "rsim_ros"
+    exec: "render"
+    name: "render"
+    param:
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: framerate
+        value: $(var frequency)
+
+- node:
+    pkg: "rsim_ros"
+    exec: "gamepad"
+    name: "gamepad"
+    param:
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: frequency
+        value: $(var frequency)
+
+- node:
+    pkg: "robot_control"
+    exec: "velocity_pid"
+    name: "velocity_pid_blue_0"
+    param:
+    -
+        name: color
+        value: blue
+    -
+        name: robot_id
+        value: 0
+
+# - node:
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_blue_0"
+#     param:
+#     -
+#         name: color
+#         value: blue
+#     -
+#         name: robot_id
+#         value: 0
+
+# - node:   
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_blue_1"
+#     param:
+#     -
+#         name: color
+#         value: blue
+#     -
+#         name: robot_id
+#         value: 1
+
+# - node:    
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_blue_2"
+#     param:
+#     -
+#         name: color
+#         value: blue
+#     -
+#         name: robot_id
+#         value: 2
+
+# - node:    
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_yellow_0"
+#     param:
+#     -
+#         name: color
+#         value: yellow
+#     -
+#         name: robot_id
+#         value: 0
+
+# - node:    
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_yellow_1"
+#     param:
+#     -
+#         name: color
+#         value: yellow
+#     -
+#         name: robot_id
+#         value: 1
+
+# - node:    
+#     pkg: "robot_control"
+#     exec: "controller"
+#     name: "control_yellow_2"
+#     param:
+#     -
+#         name: color
+#         value: yellow
+#     -
+#         name: robot_id
+#         value: 2
+    
