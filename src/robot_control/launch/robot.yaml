@@ -10,14 +10,14 @@ launch:
     exec: "imu"
     name: "imu"
 
-# - node:
-#     pkg: "robot_control"
-#     exec: "velocity_pid"
-#     name: "velocity_pid_blue_0"
-#     param:
-#     -
-#         name: color
-#         value: blue
-#     -
-#         name: robot_id
-#         value: 0
+- node:
+    pkg: "robot_control"
+    exec: "velocity_pid"
+    name: "velocity_pid_blue_0"
+    param:
+    -
+        name: color
+        value: blue
+    -
+        name: robot_id
+        value: 0
