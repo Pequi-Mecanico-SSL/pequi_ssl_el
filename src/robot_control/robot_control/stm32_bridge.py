@@ -21,12 +21,13 @@ class Stm32Bridge(Node):
             'encoder_values',
             10)
         
-        self.bus  = SMBus(0)
+        self.bus  = SMBus(1)
         self.addr = 0x42
         self.i2c_lock = Lock()
+        self.latest_command = [50.0, 50.0, 50.0, 50.0]
 
         self.last_encoder_published_time = self.get_clock().now()
-        self.encoder_publish_timer = self.create_timer(0.1, self.publish_encoder_values_callback)
+        self.encoder_publish_timer = self.create_timer(0.01, self.publish_encoder_values_callback)
 
     def publish_encoder_values(self, encoder_values):
         msg = Float32MultiArray()
@@ -39,6 +40,7 @@ class Stm32Bridge(Node):
             # Write 16 bytes to the STM32
             tx_bytes = struct.pack('<4f', *floats_out)
             self.bus.i2c_rdwr(i2c_msg.write(self.addr, tx_bytes))
+            self.latest_command = floats_out
             # Read 16 bytes back from the STM32
             rx = i2c_msg.read(self.addr, 16)
             self.bus.i2c_rdwr(rx)
@@ -54,8 +56,7 @@ class Stm32Bridge(Node):
         now = self.get_clock().now()
         time_since_last_publish = (now - self.last_encoder_published_time).nanoseconds / 1e9
         if time_since_last_publish > 0.1:
-            null_cmd_list = [-1.0, -1.0, -1.0, -1.0]  # Dummy command to trigger encoder read
-            encoder_values = self.write_and_read(null_cmd_list)
+            encoder_values = self.write_and_read(self.latest_command)
             self.publish_encoder_values(encoder_values)
 
 def main(args=None):

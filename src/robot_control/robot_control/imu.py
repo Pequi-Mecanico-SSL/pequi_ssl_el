@@ -16,7 +16,7 @@ class IMUNode(Node):
             'imu',
             10)
         
-        self.i2cbus = SMBus(1)
+        self.i2cbus = SMBus(0)
         self.gyro_acc_address = 0x6B
         self.compass_address = 0x1E
         
