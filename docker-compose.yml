@@ -1,13 +1,13 @@
 services:
-  # ping:
-  #   container_name: ssl_ping
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: ros2 run latency_test ping
-  #   network_mode: host
-  #   volumes:
-  #     - ./src:/ssl_ws/src:ro
+  ping:
+    container_name: ssl_ping
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+    command: ros2 run latency_test ping
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
 
   bash:
     container_name: bash
@@ -59,12 +59,12 @@ services:
     devices:
       - /dev/input/js0:/dev/input/js0
   
-  # control:
-  #   container_name: ssl_control
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: ros2 run robot_control controller
-  #   network_mode: host
-  #   volumes:
-  #     - ./src:/ssl_ws/src:ro
+  control:
+    container_name: ssl_control
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 run robot_control controller
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro

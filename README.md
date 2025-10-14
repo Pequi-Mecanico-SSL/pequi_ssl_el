@@ -1,19 +1,14 @@
 Build with:
 ```
-docker-compose build
+docker compose build bash simulator control
 ```
 And run simulator with:
 ```
-docker-compose run simulator
+docker compose run simulator
 ```
-To build for raspberry py 4, change base image in Dockerfile from:
+To build for the raspberry pi 4, you can build all services:
 ```
-FROM osrf/ros:iron-desktop
+docker compose build bash simulator control ping pong robot
 ```
-to:
-```
-FROM arm64v8/ros:iron-ros-base
-```
-And build with `docker-compose build`.
 
-To test communication latency, run `docker-compose run ping` on the computer and `docker-compose run pong` on the raspberry.
+To test communication latency, run `docker compose run ping` on the computer and `docker compose run pong` on the raspberry pi.
