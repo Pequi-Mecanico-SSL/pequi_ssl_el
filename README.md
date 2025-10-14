@@ -6,7 +6,6 @@ And run simulator with:
 ```
 docker compose run simulator
 ```
-```
 To build for the raspberry pi 4, you can build all modules:
 ```
 docker compose build bash simulator control ping pong robot
