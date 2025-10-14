@@ -32,7 +32,7 @@ class MimoPidOmni(Node):
         self.wheel_orientation = np.array(self.wheel_orientation, dtype=float)
 
         # self.robot_radius = float(self.declare_parameter("robot_radius", 0.09).value)  # [m]
-        self.robot_radius = float(self.declare_parameter("robot_radius", 0.175).value)  # [m]
+        self.robot_radius = float(self.declare_parameter("robot_radius", 0.175/2).value)  # [m]
 
         # --------- Useful extra params ----------
         self.control_rate_hz = float(self.declare_parameter("control_rate_hz", 1000.0).value)
