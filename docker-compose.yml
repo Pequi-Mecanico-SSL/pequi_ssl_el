@@ -17,7 +17,12 @@ services:
     command: bash
     network_mode: host
     volumes:
-      - ./src:/ssl_ws/src:ro
+      - ./src:/ssl_ws/src
+      - /dev/input:/dev/input:rw
+      - /dev/bus/usb:/dev/bus/usb:rw
+    environment:
+      - DISPLAY=:0.0
+      - SDL_AUDIODRIVER=dsp
 
   pong:
     container_name: ssl_pong
@@ -65,6 +70,16 @@ services:
       context: .
       dockerfile: Dockerfile.x86
     command: ros2 run robot_control controller
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+
+  rl:
+    container_name: ssl_rl
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 run robot_control rl
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
