@@ -2,7 +2,6 @@ import rclpy
 from rclpy.node import Node
 # Float32MultiArray
 from std_msgs.msg import Float32MultiArray
-import spidev
 import struct
 from threading import Lock
 from smbus2 import SMBus, i2c_msg

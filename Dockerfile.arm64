@@ -16,7 +16,7 @@ RUN for d in src/*/ ; do \
     fi; \
 done
 
-RUN pip install spidev
+#RUN pip install spidev
 
 RUN source /opt/ros/iron/setup.bash && \
     colcon build

@@ -1,7 +1,6 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-import spidev
 import struct
 from threading import Lock
 from smbus2 import SMBus
@@ -47,7 +46,7 @@ class IMUNode(Node):
         # enable BDU
         self.i2cbus.write_byte_data(self.gyro_acc_address, self.registers['CTRL3_C'], 0x44)
 
-        self.timer = self.create_timer(0.01, self.publish_imu)
+        self.timer = self.create_timer(0.001, self.publish_imu)
 
     def publish_imu(self):
         msg = Imu()
