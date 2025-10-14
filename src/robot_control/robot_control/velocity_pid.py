@@ -60,6 +60,17 @@ class MimoPidOmni(Node):
                     [0.0, kd_default[1], 0.0],
                     [0.0, 0.0, kd_default[2]]]
         
+        self.wheel_kp = 0.1
+        self.wheel_ki = 0.1
+        self.wheel_kd = 0.0
+        self.target_wheel_velocities = np.zeros(4)
+        self.current_wheel_velocities = np.zeros(4)
+        self.wheel_integrators = np.zeros(4)
+        self.wheel_previous_errors = np.zeros(4)
+        self.wheel_integrator_limit = 5.0
+        self.wheel_derivative_filter_alpha = 0.5
+        self.wheel_derivative_filtered = np.zeros(4)
+        
         self.integrator_limit = float(self.declare_parameter("integrator_limit", 10.0).value)
         self.derivative_filter_alpha = float(self.declare_parameter("derivative_filter_alpha", 0.5).value)
         
@@ -154,20 +165,38 @@ class MimoPidOmni(Node):
     
     def current_wheel_vel_callback(self, msg: Float32MultiArray):
         wheel_vels = np.array(msg.data, dtype=float)
-        current_velocity_from_wheel = np.linalg.pinv(self.jacobian_wheel_ang_vel) @ wheel_vels
+        self.current_wheel_velocities = np.linalg.pinv(self.jacobian_wheel_ang_vel) @ wheel_vels
         if self.current_velocity is None:
             self.current_velocity = np.zeros(3)
         # Update only x and y from wheel encoders, angular velocity from IMU if available
-        self.current_velocity[0] = current_velocity_from_wheel[0]
-        self.current_velocity[1] = current_velocity_from_wheel[1]
+        self.current_velocity[0] = self.current_wheel_velocities[0]
+        self.current_velocity[1] = self.current_wheel_velocities[1]
         if not self.received_from_imu:
-            self.current_velocity[2] = current_velocity_from_wheel[2]
+            self.current_velocity[2] = self.current_wheel_velocities[2]
         # Publish inferred velocity
         twist = Twist()
-        twist.linear.x = float(current_velocity_from_wheel[0])
-        twist.linear.y = float(current_velocity_from_wheel[1])
-        twist.angular.z = float(current_velocity_from_wheel[2])
+        twist.linear.x = float(self.current_wheel_velocities[0])
+        twist.linear.y = float(self.current_wheel_velocities[1])
+        twist.angular.z = float(self.current_wheel_velocities[2])
         self.pub_current_vel_from_wheel.publish(twist)
+    
+    def wheel_pid(self, i, dt):
+        error = self.target_wheel_velocities[i] - self.current_wheel_velocities[i]
+
+        # Integrator with clamp (anti-windup)
+        self.wheel_integrators[i] += error * dt
+        if abs(self.wheel_integrators[i]) > self.wheel_integrator_limit:
+            self.wheel_integrators[i] = math.copysign(self.wheel_integrator_limit, self.wheel_integrators[i])
+        
+        # Derivative with low-pass
+        error_derivative = (error - self.wheel_previous_errors[i]) / max(dt, 1e-6)
+        self.wheel_derivative_filtered[i] = self.wheel_derivative_filter_alpha * self.wheel_derivative_filtered[i] \
+            + (1.0 - self.wheel_derivative_filter_alpha) * error_derivative
+
+        pid_output = self.wheel_kp * error + self.wheel_ki * self.wheel_integrators[i] + self.wheel_kd * self.wheel_derivative_filtered[i]
+
+        output = np.clip(pid_output + self.output_mid, self.min_output, self.max_output)
+        return output
 
     # -------------------- Control --------------------
     def pid_loop(self):
@@ -200,8 +229,11 @@ class MimoPidOmni(Node):
 
         pid_output = self.Kp @ error + self.Ki @ self.integrator + self.Kd @ self.derivative_filtered
 
-        wheel_output = self.jacobian_wheel_ang_vel @ pid_output
-        output = np.clip(wheel_output + self.output_mid, self.min_output, self.max_output)
+        self.target_wheel_velocities = self.jacobian_wheel_ang_vel @ pid_output
+        # output = np.clip(wheel_output + self.output_mid, self.min_output, self.max_output)
+        output = np.zeros(4)
+        for i in range(4):
+            output[i] = self.wheel_pid(i, dt)
 
         # Publish
         msg = Float32MultiArray()
