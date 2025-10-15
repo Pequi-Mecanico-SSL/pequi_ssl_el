@@ -36,9 +36,9 @@ class MimoPidOmni(Node):
         self.robot_radius = float(self.declare_parameter("robot_radius", 0.175/2).value)  # [m]
 
         # --------- Useful extra params ----------
-        self.control_rate_hz = float(self.declare_parameter("control_rate_hz", 1000.0).value)
+        self.control_rate_hz = float(self.declare_parameter("control_rate_hz", 100.0).value)
         self.wheel_radius = float(self.declare_parameter("wheel_radius", 0.049/2.0).value)  # [m]
-        output_range = float(self.declare_parameter("output_range", 40.0).value)
+        output_range = float(self.declare_parameter("output_range", 30.0).value)
         self.output_mid = float(self.declare_parameter("output_mid", 50.0).value)
         self.max_output = self.output_mid + output_range
         self.min_output = self.output_mid - output_range
@@ -61,13 +61,13 @@ class MimoPidOmni(Node):
                     [0.0, 0.0, kd_default[2]]]
         
         self.wheel_kp = 0.1
-        self.wheel_ki = 0.1
+        self.wheel_ki = 1.0
         self.wheel_kd = 0.0
         self.target_wheel_velocities = np.zeros(4)
         self.current_wheel_velocities = np.zeros(4)
         self.wheel_integrators = np.zeros(4)
         self.wheel_previous_errors = np.zeros(4)
-        self.wheel_integrator_limit = 5.0
+        self.wheel_integrator_limit = 10.0
         self.wheel_derivative_filter_alpha = 0.5
         self.wheel_derivative_filtered = np.zeros(4)
         
@@ -85,7 +85,7 @@ class MimoPidOmni(Node):
         self.last_movement_time = self.get_clock().now()
         self.min_time_still_to_calibrate_imu = Duration(seconds=1.0)
 
-        self.print_freq = 4.0  # Hz
+        self.print_freq = 10.0  # Hz
         self.last_print_time = self.get_clock().now()
         self.ang_vel_offset = 0.0
         self.offset_measurements = 0
@@ -164,20 +164,20 @@ class MimoPidOmni(Node):
             self.last_movement_time = self.get_clock().now()
     
     def current_wheel_vel_callback(self, msg: Float32MultiArray):
-        wheel_vels = np.array(msg.data, dtype=float)
-        self.current_wheel_velocities = np.linalg.pinv(self.jacobian_wheel_ang_vel) @ wheel_vels
+        self.current_wheel_velocities = np.array(msg.data, dtype=float)
+        current_velocity_from_wheel = np.linalg.pinv(self.jacobian_wheel_ang_vel) @ self.current_wheel_velocities
         if self.current_velocity is None:
             self.current_velocity = np.zeros(3)
         # Update only x and y from wheel encoders, angular velocity from IMU if available
-        self.current_velocity[0] = self.current_wheel_velocities[0]
-        self.current_velocity[1] = self.current_wheel_velocities[1]
+        self.current_velocity[0] = current_velocity_from_wheel[0]
+        self.current_velocity[1] = current_velocity_from_wheel[1]
         if not self.received_from_imu:
-            self.current_velocity[2] = self.current_wheel_velocities[2]
+            self.current_velocity[2] = current_velocity_from_wheel[2]
         # Publish inferred velocity
         twist = Twist()
-        twist.linear.x = float(self.current_wheel_velocities[0])
-        twist.linear.y = float(self.current_wheel_velocities[1])
-        twist.angular.z = float(self.current_wheel_velocities[2])
+        twist.linear.x = float(current_velocity_from_wheel[0])
+        twist.linear.y = float(current_velocity_from_wheel[1])
+        twist.angular.z = float(current_velocity_from_wheel[2])
         self.pub_current_vel_from_wheel.publish(twist)
     
     def wheel_pid(self, i, dt):
@@ -240,9 +240,9 @@ class MimoPidOmni(Node):
         msg.data = output.astype(np.float32).tolist()
 
         if (now - self.last_print_time).nanoseconds * 1e-9 >= 1.0 / self.print_freq:
-            # self.get_logger().info(f"PWM: {msg.data[0]:.1f}, {msg.data[1]:.1f}, {msg.data[2]:.1f}, {msg.data[3]:.1f}")
+            self.get_logger().info(f"PWM: {msg.data[0]:.1f}, {msg.data[1]:.1f}, {msg.data[2]:.1f}, {msg.data[3]:.1f}")
             # For orientation
-            self.get_logger().info(f"P: {error[2]:.2f}, I: {self.integrator[2]:.2f}, D: {self.derivative_filtered[2]:.2f}")
+            # self.get_logger().info(f"P: {error[2]:.2f}, I: {self.integrator[2]:.2f}, D: {self.derivative_filtered[2]:.2f}")
             self.last_print_time = now
 
         self.pub_pwm.publish(msg)
