@@ -1,0 +1,26 @@
+launch:
+
+- arg:
+    name: "blue_robot_count"
+    default: "3"
+- arg:
+    name: "yellow_robot_count"
+    default: "3"
+- arg:
+    name: "frequency"
+    default: "60"
+
+- node:
+    pkg: "ssl_vision_connector"
+    exec: "protobuf_to_ros"
+    name: "protobuf_to_ros"
+    param:
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: framerate
+        value: $(var frequency)
