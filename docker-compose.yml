@@ -35,7 +35,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.arm64
-    command: ros2 launch robot_control robot.yaml
+        #command: colcon build && ros2 launch robot_control robot.yaml
+    command: bash -lc 'colcon build  --packages-select robot_control && ros2 launch robot_control robot.yaml'
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
