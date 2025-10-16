@@ -25,7 +25,8 @@ setup(
             'controller = robot_control.controller:main',
             'stm32_bridge = robot_control.stm32_bridge:main',
             'imu = robot_control.imu:main',
-            'velocity_pid = robot_control.velocity_pid:main'
+            'robot_pid = robot_control.robot_pid:main',
+            'wheel_pid = robot_control.wheel_pid:main'
         ],
     },
 )
