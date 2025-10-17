@@ -14,7 +14,7 @@ setup(
         ('share/' + package_name, glob('launch/*.yaml'))
 
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'protobuf'],
     zip_safe=True,
     maintainer='gus',
     maintainer_email='gustavomoura@discente.ufg.br',

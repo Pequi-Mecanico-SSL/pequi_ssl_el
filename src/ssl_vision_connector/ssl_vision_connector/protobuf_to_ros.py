@@ -11,6 +11,9 @@ import socket
 from .messages.messages_robocup_ssl_wrapper_pb2 import SSL_WrapperPacket
 
 
+# Simulator uses a 9 by 6 field and flips y-axis
+# Use geometry from wrapper packets to scale to simulator field
+# TODO: remove unecessary exception handling code
 
 
 class SSLVisionProtobufToROS(Node):
@@ -72,6 +75,13 @@ class SSLVisionProtobufToROS(Node):
 
         self.get_logger().info('SSL Vision Protobuf Connector Node Started')
 
+        # Cached field geometry from SSL-Vision (meters). None until first geometry packet.
+        self.field_length_m = None
+        self.field_width_m = None
+        # Simulator field dimensions in meters (Division B: 9 x 6)
+        self.sim_length_m = 9.0
+        self.sim_width_m = 6.0
+
     
     def get_robot_id_converter(self, color: str ):
         print(color, "presence counter: ", self.presence_counter[color])
@@ -120,9 +130,18 @@ class SSLVisionProtobufToROS(Node):
 
             msg = Pose2D()
 
-            # Simulator uses a 9 by 6 field and flips y-axis
-            msg.x = robot.x / 1000
-            msg.y = -robot.y / 1000
+            # Scale using geometry if available: convert mm -> m and map real field to simulator field
+            print("PROTOBUF MESSAGE: (x:",robot.x,", y:",robot.y,", orientation:",robot.orientation,")\n")
+            if self.field_length_m and self.field_width_m:
+                scale_x = self.sim_length_m / self.field_length_m
+                scale_y = self.sim_width_m / self.field_width_m
+            else:
+                # Fallback: assume SSL-EL (4.5 x 3 m) to simulator (9 x 6 m)
+                scale_x = self.sim_length_m / 4.5
+                scale_y = self.sim_width_m / 3.0
+
+            msg.x = (robot.x / 1000.0) * scale_x
+            msg.y = -(robot.y / 1000.0) * scale_y
             msg.theta = -robot.orientation
             publishers[index].publish(msg)
 
@@ -144,6 +163,16 @@ class SSLVisionProtobufToROS(Node):
         self.get_logger().info(f"Received {len(data[0])} bytes from {data[1]}")
         ssl_protobuf_packet = SSL_WrapperPacket.FromString(data[0])
 
+        # Update cached field geometry if provided
+        try:
+            if ssl_protobuf_packet.HasField('geometry') and ssl_protobuf_packet.geometry.HasField('field'):
+                # Convert mm to meters
+                self.field_length_m = ssl_protobuf_packet.geometry.field.field_length / 1000.0
+                self.field_width_m = ssl_protobuf_packet.geometry.field.field_width / 1000.0
+        except Exception as e:
+            # Keep previous geometry on any parsing error
+            self.get_logger().warn(f"Failed to parse geometry: {e}")
+
         #print("Detection = ", ssl_protobuf_packet)
 
         # Publish ball position
@@ -151,8 +180,14 @@ class SSLVisionProtobufToROS(Node):
             ball_msg = Pose2D()
             protobuf_ball = ssl_protobuf_packet.detection.balls[0]
             #print("Ball: ", protobuf_ball)
-            ball_msg.x = protobuf_ball.x / 1000
-            ball_msg.y = -protobuf_ball.y / 1000
+            if self.field_length_m and self.field_width_m:
+                scale_x = self.sim_length_m / self.field_length_m
+                scale_y = self.sim_width_m / self.field_width_m
+            else:
+                scale_x = self.sim_length_m / 4.5
+                scale_y = self.sim_width_m / 3.0
+            ball_msg.x = (protobuf_ball.x / 1000.0) * scale_x
+            ball_msg.y = -(protobuf_ball.y / 1000.0) * scale_y
             ball_msg.theta = 0.0
             self.ball_publisher.publish(ball_msg)
         
