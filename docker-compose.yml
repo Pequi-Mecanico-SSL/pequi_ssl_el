@@ -10,7 +10,7 @@ services:
       - ./src:/ssl_ws/src:ro
 
   bash:
-    container_name: bash
+    container_name: ssl_bash
     build:
       context: .
       dockerfile: Dockerfile.x86
@@ -92,12 +92,17 @@ services:
     volumes:
       - ./src:/ssl_ws/src:ro
 
-  rl:
-    container_name: ssl_rl
+  strategy:
+    container_name: ssl_strategy
     build:
       context: .
       dockerfile: Dockerfile.x86
-    command: ros2 run robot_control rl
+    command: ros2 run strategy rl
     network_mode: host
     volumes:
-      - ./src:/ssl_ws/src:ro
+      - ./src:/ssl_ws/src
+      - /dev/input:/dev/input:rw
+      - /dev/bus/usb:/dev/bus/usb:rw
+    environment:
+      - DISPLAY=:0.0
+      - SDL_AUDIODRIVER=dsp

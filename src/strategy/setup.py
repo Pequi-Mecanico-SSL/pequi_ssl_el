@@ -1,7 +1,6 @@
 from setuptools import find_packages, setup
-from glob import glob 
 
-package_name = 'ssl_vision_connector'
+package_name = 'strategy'
 
 setup(
     name=package_name,
@@ -11,10 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name, glob('launch/*.yaml'))
-
+        # Install model weights to the package share so runtime can find them
+        ('share/' + package_name + '/weights', ['strategy/rl_weights.pkl']),
     ],
-    install_requires=['setuptools', 'protobuf'],
+    install_requires=['setuptools','numpy'],
     zip_safe=True,
     maintainer='gus',
     maintainer_email='gustavomoura@discente.ufg.br',
@@ -23,7 +22,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'protobuf_to_ros = ssl_vision_connector.protobuf_to_ros:main'
+            'rl_test = strategy.rl:main',
+            'strategy = strategy.strategy:main',
         ],
     },
 )
