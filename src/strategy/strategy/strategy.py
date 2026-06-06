@@ -50,7 +50,7 @@ class Strategy(Node):
             self.pubs['blue'][i] = self.create_publisher(Twist, f'/simulator/cmd/blue/robot{i}', 10)
         for i in range(self.yellow_robot_count):
             self.pubs['yellow'][i] = self.create_publisher(Twist, f'/simulator/cmd/yellow/robot{i}', 10)
-        self.team = 'blue'
+        self.team = 'yellow'
 
         # Subscribe to robot and ball poses to keep self.state updated
         for i in range(self.blue_robot_count):
@@ -88,7 +88,6 @@ class Strategy(Node):
     def timer_callback(self):
         actions = self.rl_model.state_to_action(self.state, convert=True)
         for i in range(self.blue_robot_count):
-            pass
             self.publish_action('blue', i, actions[f'blue_{i}'])
         for i in range(self.yellow_robot_count):
             self.publish_action('yellow', i, actions[f'yellow_{i}'])
