@@ -1,0 +1,33 @@
+launch:
+
+- arg:
+    name: "group_ip"
+    default: "224.5.23.1"
+- arg:
+    name: "port"
+    default: "10003"
+- arg:
+    name: "interface_ip"
+    default: "0.0.0.0"
+- arg:
+    name: "frequency"
+    default: "60"
+
+- node:
+    pkg: "ssl_referee_connector"
+    exec: "referee_to_ros"
+    name: "referee_protobuf_to_ros"
+    param:
+    -
+        name: group_ip
+        value: $(var group_ip)
+    -
+        name: port
+        value: $(var port)
+    -
+        name: interface_ip
+        value: $(var interface_ip)
+    -
+        name: frequency
+        value: $(var frequency)
+
