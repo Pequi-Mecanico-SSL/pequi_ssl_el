@@ -15,7 +15,9 @@ class IMUNode(Node):
             'imu',
             10)
         
-        self.i2cbus = SMBus(0)
+        self.declare_parameter('i2c_bus', 1)
+        self.declare_parameter('publish_rate_hz', 200.0)
+        self.i2cbus = SMBus(self.get_parameter('i2c_bus').value)
         self.gyro_acc_address = 0x6B
         self.compass_address = 0x1E
         
@@ -30,7 +32,7 @@ class IMUNode(Node):
         }
         self.max_gyro = (2000.0 * (math.pi) / 180.0) # rad/s
         self.gyro_scale = 1.16
-        self.max_accel = 4.0 # g
+        self.max_accel = 4.0 * 9.80665 # m/s^2
         self.max_int16 = 32768.0
 
         # gyroscope on all axis
@@ -46,27 +48,21 @@ class IMUNode(Node):
         # enable BDU
         self.i2cbus.write_byte_data(self.gyro_acc_address, self.registers['CTRL3_C'], 0x44)
 
-        self.timer = self.create_timer(0.001, self.publish_imu)
+        rate = self.get_parameter('publish_rate_hz').value
+        self.timer = self.create_timer(1.0 / rate, self.publish_imu)
 
     def publish_imu(self):
         msg = Imu()
         msg.header.frame_id = 'imu'
         msg.header.stamp = self.get_clock().now().to_msg()
-        # read gyroscope data
-        gyro_data = self.i2cbus.read_i2c_block_data(self.gyro_acc_address, self.registers['OUTX_L_G'], 6)
-        gyro_data = list(struct.unpack('<hhh', bytes(gyro_data)))
-        for i in range(3):
-            gyro_data[i] = gyro_data[i] * (self.max_gyro / self.max_int16) * self.gyro_scale
-        # set angular velocity
+        # gyro and accel output registers are contiguous: one 12-byte read
+        raw = self.i2cbus.read_i2c_block_data(self.gyro_acc_address, self.registers['OUTX_L_G'], 12)
+        data = struct.unpack('<hhhhhh', bytes(raw))
+        gyro_data = [v * (self.max_gyro / self.max_int16) * self.gyro_scale for v in data[:3]]
+        accel_data = [v * (self.max_accel / self.max_int16) for v in data[3:]]
         msg.angular_velocity.x = -gyro_data[0]
         msg.angular_velocity.y = -gyro_data[1]
         msg.angular_velocity.z = -gyro_data[2]
-
-        # read accelerometer data
-        accel_data = self.i2cbus.read_i2c_block_data(self.gyro_acc_address, self.registers['OUTX_L_XL'], 6)
-        accel_data = list(struct.unpack('<hhh', bytes(accel_data)))
-        for i in range(3):
-            accel_data[i] = accel_data[i] * (self.max_accel / self.max_int16)
         # set linear acceleration
         msg.linear_acceleration.x = accel_data[0]
         msg.linear_acceleration.y = accel_data[1]

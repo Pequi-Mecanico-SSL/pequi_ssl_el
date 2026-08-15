@@ -23,7 +23,10 @@ setup(
     entry_points={
         'console_scripts': [
             'controller = robot_control.controller:main',
-            'stm32_bridge = robot_control.stm32_bridge:main',
+            'can_bridge = robot_control.can_bridge:main',
+            'kinematics = robot_control.kinematics:main',
+            'velocity_controller = robot_control.velocity_controller:main',
+            'teleop = robot_control.teleop:main',
             'imu = robot_control.imu:main',
             'robot_pid = robot_control.robot_pid:main',
             'wheel_pid = robot_control.wheel_pid:main'

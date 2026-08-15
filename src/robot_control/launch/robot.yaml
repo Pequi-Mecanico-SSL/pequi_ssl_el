@@ -2,8 +2,8 @@ launch:
 
 - node:
     pkg: "robot_control"
-    exec: "stm32_bridge"
-    name: "stm32_bridge"
+    exec: "can_bridge"
+    name: "can_bridge"
 
 - node:
     pkg: "robot_control"
@@ -12,24 +12,19 @@ launch:
 
 - node:
     pkg: "robot_control"
-    exec: "robot_pid"
-    name: "robot_pid_blue_0"
-    param:
-    -
-        name: color
-        value: blue
-    -
-        name: robot_id
-        value: 0
+    exec: "velocity_controller"
+    name: "velocity_controller"
 
 - node:
     pkg: "robot_control"
-    exec: "wheel_pid"
-    name: "wheel_pid_blue_0"
-    param:
+    exec: "kinematics"
+    name: "kinematics"
+    remap:
     -
-        name: color
-        value: blue
-    -
-        name: robot_id
-        value: 0
+        from: "cmd_vel"
+        to: "cmd_vel_corrected"
+
+- node:
+    pkg: "robot_control"
+    exec: "teleop"
+    name: "teleop"

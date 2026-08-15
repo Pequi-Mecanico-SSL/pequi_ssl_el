@@ -13,7 +13,7 @@ services:
     container_name: ssl_bash
     build:
       context: .
-      dockerfile: Dockerfile.x86
+      dockerfile: Dockerfile.arm64
     command: bash
     network_mode: host
     volumes:
@@ -40,8 +40,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.arm64
-        #command: colcon build && ros2 launch robot_control robot.yaml
-    command: bash -lc 'colcon build  --packages-select robot_control && ros2 launch robot_control robot.yaml'
+    command: bash -lc 'colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro
