@@ -27,6 +27,10 @@ class SSLVisionProtobufToROS(Node):
                 ('blue_robot_count', 3),
                 ('yellow_robot_count', 3),
                 ('frequency', 60),
+                # 224.5.23.2:10006 = real ssl-vision (our config)
+                # 224.5.23.2:10020 = grSim (grsim-rig default)
+                ('vision_ip', '224.5.23.2'),
+                ('vision_port', 10006),
             ]
         )
         self.robot_count = {}
@@ -38,8 +42,9 @@ class SSLVisionProtobufToROS(Node):
 
 
         # Protobuf connection setup
-        self.ssl_vision_ip = '224.5.23.2'
-        self.ssl_vision_port = 10006
+        self.ssl_vision_ip = self.get_parameter('vision_ip').get_parameter_value().string_value
+        self.ssl_vision_port = self.get_parameter('vision_port').get_parameter_value().integer_value
+        self.get_logger().info(f'listening for vision on {self.ssl_vision_ip}:{self.ssl_vision_port}')
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
