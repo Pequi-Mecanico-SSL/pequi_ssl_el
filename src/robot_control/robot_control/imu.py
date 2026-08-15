@@ -58,9 +58,9 @@ class IMUNode(Node):
         for i in range(3):
             gyro_data[i] = gyro_data[i] * (self.max_gyro / self.max_int16) * self.gyro_scale
         # set angular velocity
-        msg.angular_velocity.x = gyro_data[0]
-        msg.angular_velocity.y = gyro_data[1]
-        msg.angular_velocity.z = gyro_data[2]
+        msg.angular_velocity.x = -gyro_data[0]
+        msg.angular_velocity.y = -gyro_data[1]
+        msg.angular_velocity.z = -gyro_data[2]
 
         # read accelerometer data
         accel_data = self.i2cbus.read_i2c_block_data(self.gyro_acc_address, self.registers['OUTX_L_XL'], 6)
