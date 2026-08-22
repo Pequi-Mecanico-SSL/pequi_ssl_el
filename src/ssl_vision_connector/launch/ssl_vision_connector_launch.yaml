@@ -9,6 +9,13 @@ launch:
 - arg:
     name: "frequency"
     default: "60"
+- arg:
+    name: "vision_ip"
+    default: "224.5.23.2"
+- arg:
+    name: "vision_port"
+    # 10006 = real ssl-vision (our config); 10020 = grSim (grsim-rig)
+    default: "10006"
 
 - node:
     pkg: "ssl_vision_connector"
@@ -22,5 +29,11 @@ launch:
         name: yellow_robot_count
         value: $(var yellow_robot_count)
     -
-        name: framerate
+        name: frequency
         value: $(var frequency)
+    -
+        name: vision_ip
+        value: $(var vision_ip)
+    -
+        name: vision_port
+        value: $(var vision_port)

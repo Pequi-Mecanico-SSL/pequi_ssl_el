@@ -106,3 +106,16 @@ services:
     environment:
       - DISPLAY=:0.0
       - SDL_AUDIODRIVER=dsp
+
+  # Vision input adapter: SSL wire-protocol UDP -> /simulator/poses/* topics.
+  # Real ssl-vision (:10006) by default; for grSim, append the launch arg:
+  #   docker compose run vision_connector ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml vision_port:=10020
+  vision_connector:
+    container_name: ssl_vision_connector
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml
+    network_mode: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
