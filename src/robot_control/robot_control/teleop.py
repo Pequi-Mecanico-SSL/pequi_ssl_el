@@ -5,7 +5,8 @@ right stick = translation (axis1 up = forward, axis0 right = -y), left stick
 X (axis4) = rotation (right = clockwise). axis2 is the arm switch: positive = enable motors,
 negative = estop.
 
-Scales are signed: wheel-frame value = axis * scale, so a negative scale
+scale_trans is the translation speed at full deflection for both x and y
+(stick right maps to -y per REP 103). scale_w is signed: a negative value
 inverts the control. Publishes zeros while sticks are centered so the bridge
 deadman stays fed; on device loss it publishes zeros and keeps retrying.
 """
@@ -30,18 +31,17 @@ class Teleop(Node):
         self.declare_parameter('axis_x', 1)
         self.declare_parameter('axis_y', 0)
         self.declare_parameter('axis_w', 4)
-        self.declare_parameter('scale_x', 1.0)    # m/s at full deflection
-        self.declare_parameter('scale_y', -1.0)   # m/s
-        self.declare_parameter('scale_w', -3.0)   # rad/s
-        self.declare_parameter('deadzone', 0.1)
+        self.declare_parameter('scale_trans', 1.0)  # m/s at full deflection
+        self.declare_parameter('scale_w', -5.0)     # rad/s
+        self.declare_parameter('deadzone', 0.01)
         self.declare_parameter('arm_axis', 2)     # up = enable, down = estop; -1 to disable
         self.declare_parameter('estop_button', -1)
 
         p = lambda n: self.get_parameter(n).value
         self.device = p('device')
         self.axis_map = {'x': p('axis_x'), 'y': p('axis_y'), 'w': p('axis_w')}
-        self.scales = {'x': float(p('scale_x')), 'y': float(p('scale_y')),
-                       'w': float(p('scale_w'))}
+        trans = float(p('scale_trans'))
+        self.scales = {'x': trans, 'y': -trans, 'w': float(p('scale_w'))}
         self.deadzone = float(p('deadzone'))
         self.arm_axis = p('arm_axis')
         self.estop_button = p('estop_button')

@@ -9,6 +9,8 @@ launch:
     pkg: "robot_control"
     exec: "imu"
     name: "imu"
+    respawn: "true"
+    respawn_delay: 1.0
 
 - node:
     pkg: "robot_control"

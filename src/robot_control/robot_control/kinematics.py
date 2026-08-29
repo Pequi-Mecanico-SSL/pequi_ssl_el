@@ -21,7 +21,7 @@ class Kinematics(Node):
         super().__init__('kinematics')
         # motor order: 0 front-right, 1 front-left, 2 back-right, 3 back-left
         self.declare_parameter('wheel_angles_deg', [-60.0, 60.0, -135.0, 135.0])
-        self.declare_parameter('robot_radius', 0.0875)
+        self.declare_parameter('robot_radius', 0.077)
         self.declare_parameter('wheel_radius', 0.0245)
         self.declare_parameter('max_wheel_rad_s', 40.0)
 

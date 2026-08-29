@@ -31,7 +31,8 @@ class IMUNode(Node):
             'OUTX_L_XL': 0x28,
         }
         self.max_gyro = (2000.0 * (math.pi) / 180.0) # rad/s
-        self.gyro_scale = 1.16
+        # measured 2026-08-29: 10-turn spins both directions agreed within 0.1%
+        self.gyro_scale = 1.147
         self.max_accel = 4.0 * 9.80665 # m/s^2
         self.max_int16 = 32768.0
 
