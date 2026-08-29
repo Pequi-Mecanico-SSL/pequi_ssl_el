@@ -37,10 +37,13 @@ services:
   robot:
     container_name: ssl_robot
     privileged: true
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.arm64
-    command: bash -lc 'colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
+    # clean build: a power cut mid-write can leave truncated files in
+    # build/install that incremental builds never repair (mtime-based skip)
+    command: bash -lc 'rm -rf /ssl_ws/build /ssl_ws/install && colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
     network_mode: host
     volumes:
       - ./src:/ssl_ws/src:ro

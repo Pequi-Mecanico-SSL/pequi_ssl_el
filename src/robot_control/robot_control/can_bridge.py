@@ -22,7 +22,8 @@ from std_msgs.msg import Empty, Float32MultiArray
 N_MOTORS = 4
 ID_ESTOP, ID_SETPOINT, ID_CMD, ID_TLM, ID_HELLO = 0x000, 0x080, 0x100, 0x200, 0x300
 (OP_STOP, OP_VEL, OP_ENABLE, OP_DISABLE, OP_CURLIM,
- OP_TELEM, OP_TERM, OP_PING, OP_WATCHDOG) = range(9)
+ OP_TELEM, OP_TERM, OP_PING, OP_WATCHDOG, OP_GAIN) = range(10)
+GAIN_VEL_KP, GAIN_VEL_KI = 0, 1
 FLAG_ENABLED, FLAG_FOC_OK, FLAG_WD_TRIPPED = 1, 2, 4
 
 
@@ -34,7 +35,11 @@ class CanBridge(Node):
         self.declare_parameter('watchdog_ms', 500)
         self.declare_parameter('setpoint_rate_hz', 50.0)
         self.declare_parameter('cmd_timeout_s', 0.5)
-        self.declare_parameter('current_limit_a', 0.0)  # 0 = firmware default
+        # ESC velocity-loop tuning, pushed on startup and on ESC reboot
+        # (values are volatile on the ESC side); 0 = keep firmware default
+        self.declare_parameter('current_limit_a', 1.3)
+        self.declare_parameter('vel_pid_kp', 0.04)
+        self.declare_parameter('vel_pid_ki', 0.15)
 
         iface = self.get_parameter('can_interface').value
         self.telemetry_period_ms = int(self.get_parameter('telemetry_period_ms').value)
@@ -42,6 +47,8 @@ class CanBridge(Node):
         setpoint_rate = float(self.get_parameter('setpoint_rate_hz').value)
         self.cmd_timeout = float(self.get_parameter('cmd_timeout_s').value)
         self.current_limit = float(self.get_parameter('current_limit_a').value)
+        self.vel_pid_kp = float(self.get_parameter('vel_pid_kp').value)
+        self.vel_pid_ki = float(self.get_parameter('vel_pid_ki').value)
 
         self.sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
         # only telemetry and hello frames reach us
@@ -88,6 +95,10 @@ class CanBridge(Node):
         self.send_cmd(i, OP_WATCHDOG, struct.pack('<H', self.watchdog_ms))
         if self.current_limit > 0:
             self.send_cmd(i, OP_CURLIM, struct.pack('<f', self.current_limit))
+        for idx, val in ((GAIN_VEL_KP, self.vel_pid_kp),
+                         (GAIN_VEL_KI, self.vel_pid_ki)):
+            if val > 0:
+                self.send_cmd(i, OP_GAIN, struct.pack('<Bf', idx, val))
         if not self.estopped:
             self.send_cmd(i, OP_ENABLE)
 
