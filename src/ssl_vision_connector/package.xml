@@ -3,7 +3,7 @@
 <package format="3">
   <name>ssl_vision_connector</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>SSL-Vision multicast to ROS 2: publishes robot and ball poses in real-world SI (/vision/poses/*) and the field size (/vision/field).</description>
   <maintainer email="gustavomoura@discente.ufg.br">gus</maintainer>
   <license>Apache-2.0</license>
 
@@ -13,6 +13,7 @@
   <test_depend>python3-pytest</test_depend>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>ros2launch</exec_depend>
 

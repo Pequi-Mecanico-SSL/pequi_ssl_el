@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='gus',
     maintainer_email='gustavomoura@discente.ufg.br',
-    description='TODO: Package description',
+    description='SSL-Vision multicast to ROS 2: publishes robot and ball poses in real-world SI (/vision/poses/*) and the field size (/vision/field).',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

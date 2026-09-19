@@ -1,19 +1,38 @@
-from typing import List
-import cv2
-import numpy as np
+"""SSL-Vision multicast -> real-world SI pose topics.
+
+Publishes what the camera sees, in real meters and radians, in a
+right-handed field frame (x toward the +x goal, y left, theta CCW):
+
+    /vision/poses/{blue,yellow}/robot<i>   geometry_msgs/Pose2D  (m, rad)
+    /vision/poses/ball                     geometry_msgs/Pose2D  (m)
+    /vision/field                          std_msgs/Float32MultiArray
+                                           [field_length_m, field_width_m]
+
+No coordinate scaling happens here; the mapping to the policy's 9x6
+training frame is done in the rl_strategy package. Downstream consumers
+receive unscaled SI coordinates.
+
+`mirror` parameter: our real ssl-vision calibration emits a mirrored frame
+(y and theta run backwards vs. right-handed; determined empirically with the real
+camera setup). mirror:=true (default) flips y and theta to
+correct it. grSim's vision output is already right-handed: use mirror:=false
+on port 10020.
+
+Robot identity: SSL-Vision pattern ids flicker on a partial field, so the
+top-k most-persistently-seen vision ids (presence counter with decay) map to
+robot0..robot<k-1> per color, ordered by vision id.
+"""
+import socket
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Pose2D, Twist
-
-import socket
+from geometry_msgs.msg import Pose2D
+from std_msgs.msg import Float32MultiArray
 
 from .messages.messages_robocup_ssl_wrapper_pb2 import SSL_WrapperPacket
 
-
-# Simulator uses a 9 by 6 field and flips y-axis
-# Use geometry from wrapper packets to scale to simulator field
-# TODO: remove unecessary exception handling code
+DECAY_PARAMETER = 0.9
+MAX_VISION_IDS = 16
 
 
 class SSLVisionProtobufToROS(Node):
@@ -28,196 +47,174 @@ class SSLVisionProtobufToROS(Node):
                 ('yellow_robot_count', 3),
                 ('frequency', 60),
                 # 224.5.23.2:10006 = real ssl-vision (our config)
-                # 224.5.23.2:10020 = grSim (grsim-rig default)
+                # 224.5.23.2:10020 = grSim default
                 ('vision_ip', '224.5.23.2'),
                 ('vision_port', 10006),
+                # true: correct our mirrored ssl-vision calibration (real camera)
+                # false: source is already right-handed (grSim)
+                ('mirror', True),
             ]
         )
-        self.robot_count = {}
-        self.robot_count['blue'] = self.get_parameter('blue_robot_count').get_parameter_value().integer_value
-        self.robot_count['yellow'] = self.get_parameter('yellow_robot_count').get_parameter_value().integer_value
+        gp = lambda n: self.get_parameter(n).get_parameter_value()
+        self.robot_count = {
+            'blue': gp('blue_robot_count').integer_value,
+            'yellow': gp('yellow_robot_count').integer_value,
+        }
+        frequency = gp('frequency').integer_value
+        self.mirror = gp('mirror').bool_value
 
-        frequency = self.get_parameter('frequency').get_parameter_value().integer_value
-        time_step_ms = 1000 // frequency
+        vision_ip = gp('vision_ip').string_value
+        vision_port = gp('vision_port').integer_value
+        self.get_logger().info(
+            f'listening for vision on {vision_ip}:{vision_port} '
+            f'(mirror={self.mirror})'
+        )
 
-
-        # Protobuf connection setup
-        self.ssl_vision_ip = self.get_parameter('vision_ip').get_parameter_value().string_value
-        self.ssl_vision_port = self.get_parameter('vision_port').get_parameter_value().integer_value
-        self.get_logger().info(f'listening for vision on {self.ssl_vision_ip}:{self.ssl_vision_port}')
-
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.sock = socket.socket(
+            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 128)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-        self.sock.bind(('', self.ssl_vision_port))
-        mreq = socket.inet_aton(self.ssl_vision_ip) + socket.inet_aton('0.0.0.0')
+        self.sock.bind(('', vision_port))
+        mreq = socket.inet_aton(vision_ip) + socket.inet_aton('0.0.0.0')
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        # Non-blocking: each tick drains the queue and publishes from the
+        # freshest packets. A blocking one-packet-per-tick read falls behind
+        # whenever the source outpaces the timer (grSim: ~235 pkt/s vs 60 Hz)
+        # and the queue backlog turns into seconds of vision lag, so the
+        # strategy acts on a seconds-old world. Same drain pattern as the RL
+        # repository's deploy script.
+        self.sock.setblocking(False)
 
-        self.ball_publisher = self.create_publisher(Pose2D, '/simulator/poses/ball', 10)
+        self.ball_publisher = self.create_publisher(
+            Pose2D, '/vision/poses/ball', 10)
+        self.field_publisher = self.create_publisher(
+            Float32MultiArray, '/vision/field', 10)
+        self.pose_publishers = {
+            color: [
+                self.create_publisher(
+                    Pose2D, f'/vision/poses/{color}/robot{i}', 10)
+                for i in range(self.robot_count[color])
+            ]
+            for color in ('blue', 'yellow')
+        }
 
-
-
-        self.pose_publishers = {}
-        self.pose_publishers['blue'] = []
-        self.pose_publishers['yellow'] = []
-
-        for i in range(self.robot_count['blue']):
-            self.pose_publishers['blue'].append(
-                self.create_publisher(Pose2D, f'/simulator/poses/blue/robot{i}', 10)
-            )
-        for i in range(self.robot_count['yellow']):
-            self.pose_publishers['yellow'].append(
-                self.create_publisher(Pose2D, f'/simulator/poses/yellow/robot{i}', 10)
-            )
-
-        self.presence_counter = {}
-        self.presence_counter['blue'] = [0 for i in range(16)]
-        self.presence_counter['yellow'] = [0 for i in range(16)]
-        
-        timer_period = time_step_ms / 1000.0  # seconds
-        self.timer = self.create_timer(timer_period, self.get_protobuf_and_publish)
-
-        self.get_logger().info('SSL Vision Protobuf Connector Node Started')
-
-        # Cached field geometry from SSL-Vision (meters). None until first geometry packet.
+        self.presence_counter = {
+            'blue': [0.0] * MAX_VISION_IDS,
+            'yellow': [0.0] * MAX_VISION_IDS,
+        }
+        # cached field geometry (meters); None until first geometry packet
         self.field_length_m = None
         self.field_width_m = None
-        # Simulator field dimensions in meters (Division B: 9 x 6)
-        self.sim_length_m = 9.0
-        self.sim_width_m = 6.0
 
-    
-    def get_robot_id_converter(self, color: str ):
-        print(color, "presence counter: ", self.presence_counter[color])
-        robot_list = [(count, id) for id, count in enumerate(self.presence_counter[color])]
-        print(color, "robot list: ", robot_list)
-        sorted_by_count = sorted(robot_list, key=lambda x: x[0], reverse=True)
-        print("sorted by count: ", sorted_by_count)
-        top_k = sorted_by_count[:self.robot_count[color]]
-        print("top k: ", top_k)
-        sorted_by_id = sorted(top_k, key=lambda x: x[1])
-        print("sorted_by_id: ", sorted_by_id)
-        converter = [pair[1] for pair in sorted_by_id]
-        print("converter: ", converter)
-        return converter
+        self.create_timer(1.0 / frequency, self.get_protobuf_and_publish)
+        self.get_logger().info('SSL Vision Protobuf Connector Node Started')
+
+    # ---- robot identity ---------------------------------------------------
+
+    def get_robot_id_converter(self, color):
+        """Top-k most-seen vision ids, ordered by vision id -> ros index."""
+        robot_list = [(count, vid) for vid, count
+                      in enumerate(self.presence_counter[color])]
+        top_k = sorted(robot_list, key=lambda x: x[0],
+                       reverse=True)[:self.robot_count[color]]
+        return [pair[1] for pair in sorted(top_k, key=lambda x: x[1])]
 
     def decay_presence_counter(self):
-        DECAY_PARAMETER = 0.9
+        for color in ('blue', 'yellow'):
+            counters = self.presence_counter[color]
+            for i in range(len(counters)):
+                counters[i] *= DECAY_PARAMETER
 
-        for i in range(len(self.presence_counter['yellow'])):
-            self.presence_counter['yellow'][i] *= DECAY_PARAMETER
+    def increase_presence_counter(self, packet):
+        for robot in packet.detection.robots_yellow:
+            self.presence_counter['yellow'][robot.robot_id] += 1
+        for robot in packet.detection.robots_blue:
+            self.presence_counter['blue'][robot.robot_id] += 1
 
-        for i in range(len(self.presence_counter['blue'])):
-            self.presence_counter['blue'][i] *= DECAY_PARAMETER
-        
-        #print("Blue presence counter: ", self.blue_robot_id_presence_counter)
-        #print("Yellow presence counter: ", self.yellow_robot_id_presence_counter)
-        
-    def increase_presence_counter(self, ssl_protobuf_packet):
-        for yellow_robot in ssl_protobuf_packet.detection.robots_yellow:
-            self.presence_counter['yellow'][yellow_robot.robot_id] += 1
-        for blue_robot in ssl_protobuf_packet.detection.robots_blue:
-            self.presence_counter['blue'][blue_robot.robot_id] += 1
-        
+    # ---- publishing -------------------------------------------------------
 
+    def publish_robot(self, robot, converter, publishers):
+        if robot.robot_id not in converter:
+            # likely a detection flicker; not one of our persistent robots
+            return
+        index = converter.index(robot.robot_id)
 
-    def check_and_publish_robot(self, robot, robot_id_converter, publishers):
-            print(robot)
-
-            if robot.robot_id not in robot_id_converter:
-                # This means the robot that was detected might be a flicker of the vision system
-                print("Robot id", robot.robot_id, "is not in the top k robots, classifying as flicker")
-                return
-            else:
-                index = robot_id_converter.index(robot.robot_id)
-                print("Robot ", robot.robot_id, " has a ros id of", index)
-
-            msg = Pose2D()
-
-            # Scale using geometry if available: convert mm -> m and map real field to simulator field
-            print("PROTOBUF MESSAGE: (x:",robot.x,", y:",robot.y,", orientation:",robot.orientation,")\n")
-            if self.field_length_m and self.field_width_m:
-                scale_x = self.sim_length_m / self.field_length_m
-                scale_y = self.sim_width_m / self.field_width_m
-            else:
-                # Fallback: assume SSL-EL (4.5 x 3 m) to simulator (9 x 6 m)
-                scale_x = self.sim_length_m / 4.5
-                scale_y = self.sim_width_m / 3.0
-
-            msg.x = (robot.x / 1000.0) * scale_x
-            msg.y = -(robot.y / 1000.0) * scale_y
-            msg.theta = -robot.orientation
-            publishers[index].publish(msg)
-
+        msg = Pose2D()
+        msg.x = robot.x / 1000.0
+        msg.y = robot.y / 1000.0
+        msg.theta = float(robot.orientation)
+        if self.mirror:
+            msg.y = -msg.y
+            msg.theta = -msg.theta
+        publishers[index].publish(msg)
 
     def get_protobuf_and_publish(self):
-        # Get converter from robot_id to our 0 to robot_count IDs
-        robot_id_converter = {}
-        robot_id_converter['blue'] = self.get_robot_id_converter('blue')
-        robot_id_converter['yellow'] = self.get_robot_id_converter('yellow')
+        # Drain everything queued since the last tick; process each packet so
+        # the presence counters see all detections, publishing each packet as it is processed (the
+        # last packet published per entity is the freshest).
+        packets = []
+        while True:
+            try:
+                data, _addr = self.sock.recvfrom(4096)
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+            try:
+                packets.append(SSL_WrapperPacket.FromString(data))
+            except Exception as e:
+                self.get_logger().warn(
+                    f'Failed to parse vision packet: {e}',
+                    throttle_duration_sec=5.0)
+        if not packets:
+            return
 
-        # Units are meters, meters/s, degrees
-        # state is [ball_x, ball_y, ball_z, ball_v_x, ball_v_y,
-        #           blue_0_x, blue_0_y, blue_0_angle, blue_0_v_x, blue_0_v_y, blue_0_v_angle,
-        #           blue_0_infrared, blue_0_desired_wheel0_speed, blue_0_desired_wheel1_speed,
-        #           blue_0_desired_wheel2_speed, blue_0_desired_wheel3_speed, ...]
+        for packet in packets:
+            # field geometry (mm -> m)
+            try:
+                if packet.HasField('geometry') and packet.geometry.HasField('field'):
+                    self.field_length_m = packet.geometry.field.field_length / 1000.0
+                    self.field_width_m = packet.geometry.field.field_width / 1000.0
+            except Exception as e:
+                self.get_logger().warn(f'Failed to parse geometry: {e}')
 
-        # Get protobuf datagram
-        data = self.sock.recvfrom(4096)
-        self.get_logger().info(f"Received {len(data[0])} bytes from {data[1]}")
-        ssl_protobuf_packet = SSL_WrapperPacket.FromString(data[0])
+            # ball (first detection)
+            if len(packet.detection.balls) > 0:
+                ball = packet.detection.balls[0]
+                ball_msg = Pose2D()
+                ball_msg.x = ball.x / 1000.0
+                ball_msg.y = ball.y / 1000.0
+                if self.mirror:
+                    ball_msg.y = -ball_msg.y
+                ball_msg.theta = 0.0
+                self.ball_publisher.publish(ball_msg)
 
-        # Update cached field geometry if provided
-        try:
-            if ssl_protobuf_packet.HasField('geometry') and ssl_protobuf_packet.geometry.HasField('field'):
-                # Convert mm to meters
-                self.field_length_m = ssl_protobuf_packet.geometry.field.field_length / 1000.0
-                self.field_width_m = ssl_protobuf_packet.geometry.field.field_width / 1000.0
-        except Exception as e:
-            # Keep previous geometry on any parsing error
-            self.get_logger().warn(f"Failed to parse geometry: {e}")
+            self.increase_presence_counter(packet)
 
-        #print("Detection = ", ssl_protobuf_packet)
+            for color, robots in (('blue', packet.detection.robots_blue),
+                                  ('yellow', packet.detection.robots_yellow)):
+                converter = self.get_robot_id_converter(color)
+                for robot in robots:
+                    self.publish_robot(robot, converter, self.pose_publishers[color])
 
-        # Publish ball position
-        if len(ssl_protobuf_packet.detection.balls) > 0:
-            ball_msg = Pose2D()
-            protobuf_ball = ssl_protobuf_packet.detection.balls[0]
-            #print("Ball: ", protobuf_ball)
-            if self.field_length_m and self.field_width_m:
-                scale_x = self.sim_length_m / self.field_length_m
-                scale_y = self.sim_width_m / self.field_width_m
-            else:
-                scale_x = self.sim_length_m / 4.5
-                scale_y = self.sim_width_m / 3.0
-            ball_msg.x = (protobuf_ball.x / 1000.0) * scale_x
-            ball_msg.y = -(protobuf_ball.y / 1000.0) * scale_y
-            ball_msg.theta = 0.0
-            self.ball_publisher.publish(ball_msg)
-        
-        # Increase presence counter
-        self.increase_presence_counter(ssl_protobuf_packet)
-        
-        # Decay presence counter
+        # decay once per tick (not per packet) so the decay timescale follows
+        # the timer frequency rather than the packet rate
         self.decay_presence_counter()
-            
-        
-        for blue_robot in ssl_protobuf_packet.detection.robots_blue:
-            self.check_and_publish_robot(blue_robot, robot_id_converter['blue'], self.pose_publishers['blue'])
-        
-        for yellow_robot in ssl_protobuf_packet.detection.robots_yellow:
-            self.check_and_publish_robot(yellow_robot, robot_id_converter['yellow'], self.pose_publishers['yellow'])
+
+        if self.field_length_m is not None:
+            field_msg = Float32MultiArray()
+            field_msg.data = [self.field_length_m, self.field_width_m]
+            self.field_publisher.publish(field_msg)
+
 
 def main(args=None):
     rclpy.init(args=args)
-
-    protobuf_to_ros = SSLVisionProtobufToROS()
-
-    rclpy.spin(protobuf_to_ros)
-
-    protobuf_to_ros.destroy_node()
+    node = SSLVisionProtobufToROS()
+    rclpy.spin(node)
+    node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

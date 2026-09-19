@@ -14,8 +14,12 @@ launch:
     default: "224.5.23.2"
 - arg:
     name: "vision_port"
-    # 10006 = real ssl-vision (our config); 10020 = grSim (grsim-rig)
+    # 10006 = real ssl-vision (our config); 10020 = grSim default
     default: "10006"
+- arg:
+    name: "mirror"
+    # true = correct our mirrored real-camera calibration; false for grSim
+    default: "true"
 
 - node:
     pkg: "ssl_vision_connector"
@@ -37,3 +41,6 @@ launch:
     -
         name: vision_port
         value: $(var vision_port)
+    -
+        name: mirror
+        value: $(var mirror)
