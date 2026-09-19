@@ -1,0 +1,6 @@
+# CPU-only torch for policy inference (the net is tiny: 616->300->200->100->8).
+# The cpu index avoids pulling multi-GB CUDA wheels into the x86 container.
+--extra-index-url https://download.pytorch.org/whl/cpu
+# Only on x86 hosts: the Raspberry Pi image never runs the policy, and the
+# +cpu build tag does not resolve for aarch64.
+torch==2.4.1+cpu; platform_machine == "x86_64"

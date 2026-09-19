@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile.arm64
     command: ros2 run latency_test ping
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
 
@@ -16,6 +17,7 @@ services:
       dockerfile: Dockerfile.arm64
     command: bash
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src
       - /dev/input:/dev/input:rw
@@ -31,6 +33,7 @@ services:
       dockerfile: Dockerfile.arm64
     command: ros2 run latency_test pong
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
 
@@ -45,6 +48,7 @@ services:
     # build/install that incremental builds never repair (mtime-based skip)
     command: bash -lc 'rm -rf /ssl_ws/build /ssl_ws/install && colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
       - /dev:/dev:rw
@@ -57,6 +61,7 @@ services:
       dockerfile: Dockerfile.x86
     command: ros2 launch rsim_ros simulator_launch.yaml
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
       - /dev/input:/dev/input:rw
@@ -75,6 +80,7 @@ services:
       dockerfile: Dockerfile.x86
     command: ros2 launch rsim_ros gamepad.yaml
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
       - /dev/input:/dev/input:rw
@@ -92,6 +98,7 @@ services:
       dockerfile: Dockerfile.x86
     command: ros2 run robot_control controller
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
 
@@ -102,6 +109,7 @@ services:
       dockerfile: Dockerfile.x86
     command: ros2 run strategy rl
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src
       - /dev/input:/dev/input:rw
@@ -110,9 +118,25 @@ services:
       - DISPLAY=:0.0
       - SDL_AUDIODRIVER=dsp
 
-  # Vision input adapter: SSL wire-protocol UDP -> /simulator/poses/* topics.
-  # Real ssl-vision (:10006) by default; for grSim, append the launch arg:
-  #   docker compose run vision_connector ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml vision_port:=10020
+  # RL strategy: vendored RL policy driving /<team>/robot<i>/cmd_vel from
+  # /vision/poses/*. Topics carry real-world SI; the training-frame scaling is
+  # internal to the package.
+  rl_strategy:
+    container_name: ssl_rl_strategy
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch rl_strategy rl_strategy_launch.yaml
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+
+  # Vision input adapter: SSL wire-protocol UDP -> /vision/poses/* topics
+  # (real-world SI, right-handed). Real ssl-vision (:10006, mirror on) by
+  # default. For grSim:
+  #   docker compose run vision_connector ros2 launch ssl_vision_connector \
+  #       ssl_vision_connector_launch.yaml vision_port:=10020 mirror:=false
   vision_connector:
     container_name: ssl_vision_connector
     build:
@@ -120,5 +144,6 @@ services:
       dockerfile: Dockerfile.x86
     command: ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml
     network_mode: host
+    ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro

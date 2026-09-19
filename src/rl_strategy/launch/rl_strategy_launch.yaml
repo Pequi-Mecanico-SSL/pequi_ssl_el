@@ -1,0 +1,60 @@
+launch:
+
+- arg:
+    name: "team"
+    default: "blue"
+- arg:
+    name: "blue_robot_count"
+    default: "3"
+- arg:
+    name: "yellow_robot_count"
+    default: "3"
+- arg:
+    # Real field dimensions in meters (goal-to-goal x, sideline y).
+    name: "field_length_m"
+    default: "3.3"
+- arg:
+    name: "field_width_m"
+    default: "2.0"
+- arg:
+    name: "fps"
+    default: "30"
+- arg:
+    # "mean" = deterministic (default); "sample" = stochastic
+    name: "action_mode"
+    default: "mean"
+- arg:
+    # 1.0 = policy sees real meters (default); 0.0 = derive 9/field_length
+    # (expected to degrade ball-contact behaviors; experiments only)
+    name: "scale"
+    default: "1.0"
+
+- node:
+    pkg: "rl_strategy"
+    exec: "rl_strategy"
+    name: "rl_strategy"
+    param:
+    -
+        name: team
+        value: $(var team)
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: field_length_m
+        value: $(var field_length_m)
+    -
+        name: field_width_m
+        value: $(var field_width_m)
+    -
+        name: fps
+        value: $(var fps)
+    -
+        name: action_mode
+        value: $(var action_mode)
+    -
+        name: scale
+        value: $(var scale)

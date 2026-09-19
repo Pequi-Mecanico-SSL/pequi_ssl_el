@@ -1,0 +1,76 @@
+launch:
+
+# Solo real-robot mode: the physical robot (yellow vision pattern) plays
+# policy-side blue slot 0, the center forward that spawns at (-1.5, 0), because on
+# the real field it starts on -x and attacks the +x goal (blue's convention).
+# The other five robots are placeholders on the training spawn marks.
+#
+# Pair with the connector on the real camera:
+#   ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml \
+#       vision_port:=10006 mirror:=true yellow_robot_count:=1 blue_robot_count:=0
+#
+# Episode reset: place ball at center + robot within 25 cm of (-1.5, 0), or
+#   ros2 topic pub --once /rl_strategy/reset std_msgs/msg/Empty
+
+- arg:
+    name: "team"
+    default: "blue"
+- arg:
+    name: "action_mode"
+    default: "mean"
+- arg:
+    name: "scale"
+    default: "1.0"
+- arg:
+    name: "solo_cmd_topic"
+    # per-robot namespace convention; matches robot_control launched under
+    # ROS_NAMESPACE=/yellow/robot0 (otherwise remap its cmd_vel to this topic)
+    default: "/yellow/robot0/cmd_vel"
+- arg:
+    name: "solo_pose_topic"
+    # the physical robot wears a yellow pattern; the policy team is independent of it
+    default: "/vision/poses/yellow/robot0"
+- arg:
+    # first-contact safety caps (0.0 = uncapped; the policy commands up to
+    # 1.5 m/s / 10 rad/s)
+    name: "cmd_speed_cap"
+    default: "1.0"
+- arg:
+    name: "cmd_angular_cap"
+    default: "6.0"
+
+- node:
+    pkg: "rl_strategy"
+    exec: "rl_strategy"
+    name: "rl_strategy"
+    param:
+    -
+        name: team
+        value: $(var team)
+    -
+        name: field_length_m
+        value: 3.3
+    -
+        name: field_width_m
+        value: 2.0
+    -
+        name: action_mode
+        value: $(var action_mode)
+    -
+        name: scale
+        value: $(var scale)
+    -
+        name: placeholder_mode
+        value: "kickoff"
+    -
+        name: solo_cmd_topic
+        value: $(var solo_cmd_topic)
+    -
+        name: solo_pose_topic
+        value: $(var solo_pose_topic)
+    -
+        name: cmd_speed_cap
+        value: $(var cmd_speed_cap)
+    -
+        name: cmd_angular_cap
+        value: $(var cmd_angular_cap)
