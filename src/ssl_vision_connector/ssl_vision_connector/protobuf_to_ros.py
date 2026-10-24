@@ -7,6 +7,14 @@ right-handed field frame (x toward the +x goal, y left, theta CCW):
     /vision/poses/ball                     geometry_msgs/Pose2D  (m)
     /vision/field                          std_msgs/Float32MultiArray
                                            [field_length_m, field_width_m]
+    /vision/stamped/{blue,yellow}/robot<i> geometry_msgs/PoseStamped
+                                           same pose, header.stamp = capture
+                                           time on this machine's clock
+
+Capture time: t_capture/t_sent are on the vision PC's clock, which is not
+synchronized with ours, so only their difference (ssl-vision processing
+latency) is used: stamp = receive time - (t_sent - t_capture). Receive time
+is taken once per drain, so it can be late by up to 1/frequency.
 
 No coordinate scaling happens here; the mapping to the policy's 9x6
 training frame is done in the rl_strategy package. Downstream consumers
@@ -22,17 +30,21 @@ Robot identity: SSL-Vision pattern ids flicker on a partial field, so the
 top-k most-persistently-seen vision ids (presence counter with decay) map to
 robot0..robot<k-1> per color, ordered by vision id.
 """
+import math
 import socket
 
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
-from geometry_msgs.msg import Pose2D
+from geometry_msgs.msg import Pose2D, PoseStamped
 from std_msgs.msg import Float32MultiArray
 
 from .messages.messages_robocup_ssl_wrapper_pb2 import SSL_WrapperPacket
 
 DECAY_PARAMETER = 0.9
 MAX_VISION_IDS = 16
+# ignore t_sent - t_capture outside this range (unset fields, clock glitches)
+MAX_PROCESSING_LATENCY_S = 0.5
 
 
 class SSLVisionProtobufToROS(Node):
@@ -98,6 +110,14 @@ class SSLVisionProtobufToROS(Node):
             ]
             for color in ('blue', 'yellow')
         }
+        self.stamped_publishers = {
+            color: [
+                self.create_publisher(
+                    PoseStamped, f'/vision/stamped/{color}/robot{i}', 10)
+                for i in range(self.robot_count[color])
+            ]
+            for color in ('blue', 'yellow')
+        }
 
         self.presence_counter = {
             'blue': [0.0] * MAX_VISION_IDS,
@@ -134,7 +154,7 @@ class SSLVisionProtobufToROS(Node):
 
     # ---- publishing -------------------------------------------------------
 
-    def publish_robot(self, robot, converter, publishers):
+    def publish_robot(self, robot, converter, color, stamp):
         if robot.robot_id not in converter:
             # likely a detection flicker; not one of our persistent robots
             return
@@ -147,7 +167,23 @@ class SSLVisionProtobufToROS(Node):
         if self.mirror:
             msg.y = -msg.y
             msg.theta = -msg.theta
-        publishers[index].publish(msg)
+        self.pose_publishers[color][index].publish(msg)
+
+        stamped = PoseStamped()
+        stamped.header.stamp = stamp
+        stamped.header.frame_id = 'field'
+        stamped.pose.position.x = msg.x
+        stamped.pose.position.y = msg.y
+        stamped.pose.orientation.z = math.sin(msg.theta / 2.0)
+        stamped.pose.orientation.w = math.cos(msg.theta / 2.0)
+        self.stamped_publishers[color][index].publish(stamped)
+
+    @staticmethod
+    def processing_latency(detection):
+        latency = detection.t_sent - detection.t_capture
+        if detection.t_capture > 0.0 and 0.0 <= latency <= MAX_PROCESSING_LATENCY_S:
+            return latency
+        return 0.0
 
     def get_protobuf_and_publish(self):
         # Drain everything queued since the last tick; process each packet so
@@ -169,6 +205,7 @@ class SSLVisionProtobufToROS(Node):
                     throttle_duration_sec=5.0)
         if not packets:
             return
+        received = self.get_clock().now()
 
         for packet in packets:
             # field geometry (mm -> m)
@@ -192,11 +229,13 @@ class SSLVisionProtobufToROS(Node):
 
             self.increase_presence_counter(packet)
 
+            stamp = (received - Duration(
+                seconds=self.processing_latency(packet.detection))).to_msg()
             for color, robots in (('blue', packet.detection.robots_blue),
                                   ('yellow', packet.detection.robots_yellow)):
                 converter = self.get_robot_id_converter(color)
                 for robot in robots:
-                    self.publish_robot(robot, converter, self.pose_publishers[color])
+                    self.publish_robot(robot, converter, color, stamp)
 
         # decay once per tick (not per packet) so the decay timescale follows
         # the timer frequency rather than the packet rate

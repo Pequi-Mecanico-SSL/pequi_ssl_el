@@ -1,0 +1,59 @@
+launch:
+
+- arg:
+    name: "blue_robot_count"
+    default: "3"
+- arg:
+    name: "yellow_robot_count"
+    default: "3"
+- arg:
+    # our team: its /<team>/robot<i>/cmd_vel is used as a motion prior
+    name: "team"
+    default: "blue"
+- arg:
+    name: "use_cmd_vel"
+    default: "true"
+- arg:
+    # vision noise (1 sigma); measure it with vision_check on a still robot
+    name: "sigma_xy"
+    default: "0.005"
+- arg:
+    name: "sigma_theta"
+    default: "0.03"
+- arg:
+    # higher = reacts faster to maneuvers, noisier velocity
+    name: "accel_noise"
+    default: "0.5"
+- arg:
+    name: "ang_accel_noise"
+    default: "3.0"
+
+- node:
+    pkg: "vision_filter"
+    exec: "vision_filter"
+    name: "vision_filter"
+    param:
+    -
+        name: blue_robot_count
+        value: $(var blue_robot_count)
+    -
+        name: yellow_robot_count
+        value: $(var yellow_robot_count)
+    -
+        name: team
+        value: $(var team)
+    -
+        name: use_cmd_vel
+        value: $(var use_cmd_vel)
+    -
+        name: sigma_xy
+        value: $(var sigma_xy)
+    -
+        name: sigma_theta
+        value: $(var sigma_theta)
+    -
+        name: accel_noise
+        value: $(var accel_noise)
+    -
+        name: ang_accel_noise
+        value: $(var ang_accel_noise)
