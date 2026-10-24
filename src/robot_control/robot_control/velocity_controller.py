@@ -6,6 +6,10 @@ integrated heading is held (drives straight during translation). The gyro
 bias auto-calibrates whenever the robot is idle. If IMU data goes stale
 the commanded rate passes through open-loop.
 
+With use_odom:=true, heading and omega come from the odometry node (gyro +
+wheel fusion, bias tracked continuously) instead of this node's own gyro
+integration and idle-time bias calibration.
+
 Pipeline: cmd_vel -> [this node] -> cmd_vel_corrected -> kinematics.
 Output is published per input message, so the bridge deadman chain from
 the teleop stream stays intact.
@@ -15,6 +19,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Empty
 
@@ -34,6 +39,7 @@ class VelocityController(Node):
         self.declare_parameter('bias_tau_s', 10.0)
         self.declare_parameter('bias_max_dev', 0.1)       # rad/s, don't learn beyond this
         self.declare_parameter('idle_time_s', 1.0)
+        self.declare_parameter('use_odom', False)
 
         p = lambda n: self.get_parameter(n).value
         self.yaw_kp = float(p('yaw_kp'))
@@ -44,6 +50,7 @@ class VelocityController(Node):
         self.bias_tau = float(p('bias_tau_s'))
         self.bias_max_dev = float(p('bias_max_dev'))
         self.idle_time = float(p('idle_time_s'))
+        self.use_odom = bool(p('use_odom'))
 
         self.bias = 0.0
         self.bias_samples = 0
@@ -55,10 +62,15 @@ class VelocityController(Node):
 
         self.pub = self.create_publisher(Twist, 'cmd_vel_corrected', 10)
         self.create_subscription(Twist, 'cmd_vel', self.cmd_callback, 10)
-        self.create_subscription(Imu, 'imu', self.imu_callback, 50)
+        if self.use_odom:
+            self.create_subscription(Odometry, 'odom', self.odom_callback, 50)
+        else:
+            self.create_subscription(Imu, 'imu', self.imu_callback, 50)
         self.create_subscription(Empty, 'wheels/estop', self.reset_hold, 10)
         self.create_subscription(Empty, 'wheels/enable', self.reset_hold, 10)
-        self.get_logger().info('Velocity controller up')
+        self.get_logger().info(
+            'Velocity controller up, feedback from '
+            + ('odom (gyro + wheel fusion)' if self.use_odom else 'imu'))
 
     def reset_hold(self, _=None):
         self.hold_target = self.heading
@@ -66,6 +78,14 @@ class VelocityController(Node):
     def imu_stale(self):
         return (self.last_imu_time is None
                 or (self.get_clock().now() - self.last_imu_time).nanoseconds / 1e9 > 0.2)
+
+    def odom_callback(self, msg):
+        # stale check below still runs off last_imu_time
+        self.last_imu_time = self.get_clock().now()
+        q = msg.pose.pose.orientation
+        self.heading = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                  1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.omega = msg.twist.twist.angular.z
 
     def imu_callback(self, msg):
         now = self.get_clock().now()

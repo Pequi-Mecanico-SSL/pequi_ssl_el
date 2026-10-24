@@ -20,8 +20,24 @@ launch:
 
 - node:
     pkg: "robot_control"
+    exec: "odometry"
+    name: "odometry"
+
+- node:
+    pkg: "robot_control"
+    exec: "robot_events"
+    name: "robot_events"
+
+- node:
+    pkg: "robot_control"
     exec: "velocity_controller"
     name: "velocity_controller"
+    param:
+    -
+        # true: heading/omega from the odometry node (gyro + wheels)
+        # false: this node's own gyro integration (previous behavior)
+        name: use_odom
+        value: false
 
 - node:
     pkg: "robot_control"

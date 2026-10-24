@@ -29,7 +29,13 @@ setup(
             'teleop = robot_control.teleop:main',
             'imu = robot_control.imu:main',
             'robot_pid = robot_control.robot_pid:main',
-            'wheel_pid = robot_control.wheel_pid:main'
+            'wheel_pid = robot_control.wheel_pid:main',
+            'odometry = robot_control.odometry:main',
+            'odom_demo = robot_control.odom_demo:main',
+            'fake_robot = robot_control.fake_robot:main',
+            'odom_check = robot_control.odom_check:main',
+            'robot_events = robot_control.robot_events:main',
+            'events_demo = robot_control.events_demo:main',
         ],
     },
 )
