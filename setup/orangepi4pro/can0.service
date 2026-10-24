@@ -1,0 +1,14 @@
+[Unit]
+Description=Bring up can0 (MCP2515, 500 kbit/s)
+BindsTo=sys-subsystem-net-devices-can0.device
+After=sys-subsystem-net-devices-can0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# txqueuelen: can_bridge sends ~24 config frames in a burst at startup
+ExecStart=/usr/sbin/ip link set can0 txqueuelen 100 up type can bitrate 500000 restart-ms 100
+ExecStop=/usr/sbin/ip link set can0 down
+
+[Install]
+WantedBy=sys-subsystem-net-devices-can0.device

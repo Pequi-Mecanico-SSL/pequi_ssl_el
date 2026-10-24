@@ -1,0 +1,40 @@
+// Waveshare RS485 CAN HAT (MCP2515, 12 MHz crystal) on the Orange Pi 4 Pro header.
+// Same physical pins as on the Raspberry Pi: SPI3 CS0 (pin 24), INT on PD23 (pin 22).
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			can0_osc: can0-osc {
+				compatible = "fixed-clock";
+				#clock-cells = <0>;
+				clock-frequency = <12000000>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spi3>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			spidev@0 {
+				reg = <0>;
+				status = "disabled";
+			};
+
+			can0: mcp2515@0 {
+				compatible = "microchip,mcp2515";
+				reg = <0>;
+				spi-max-frequency = <2000000>;
+				clocks = <&can0_osc>;
+				interrupt-parent = <&pio>;
+				interrupts = <3 23 8>; // PD23, IRQ_TYPE_LEVEL_LOW
+			};
+		};
+	};
+};

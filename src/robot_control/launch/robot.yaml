@@ -4,11 +4,17 @@ launch:
     pkg: "robot_control"
     exec: "can_bridge"
     name: "can_bridge"
+    respawn: "true"
+    respawn_delay: 1.0
 
 - node:
     pkg: "robot_control"
     exec: "imu"
     name: "imu"
+    param:
+    -
+        name: "i2c_bus"
+        value: "$(env IMU_I2C_BUS 1)"
     respawn: "true"
     respawn_delay: 1.0
 

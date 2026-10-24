@@ -52,6 +52,9 @@ services:
     volumes:
       - ./src:/ssl_ws/src:ro
       - /dev:/dev:rw
+    environment:
+      # I2C bus of the IMU: 1 on the Raspberry Pi 4, 0 on the Orange Pi 4 Pro (set in .env)
+      - IMU_I2C_BUS=${IMU_I2C_BUS:-1}
   
   simulator:
     container_name: ssl_simulator

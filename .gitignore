@@ -52,3 +52,6 @@ CATKIN_IGNORE
 src/grsim_ros
 install/
 log/
+
+# per-machine compose settings (e.g. IMU_I2C_BUS)
+.env
