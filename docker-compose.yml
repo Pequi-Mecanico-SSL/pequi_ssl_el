@@ -150,3 +150,18 @@ services:
     ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
+
+  # Per-robot EKF over vision: /vision/stamped/* (+ our cmd_vel) ->
+  # /vision/filtered/* (smoothed pose, body velocity). Needs vision_connector.
+  # Test without camera/simulator (see src/vision_filter/README.md):
+  #   docker compose run vision_filter ros2 run vision_filter fake_vision
+  vision_filter:
+    container_name: ssl_vision_filter
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch vision_filter vision_filter_launch.yaml
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./src:/ssl_ws/src:ro

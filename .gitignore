@@ -55,3 +55,6 @@ log/
 
 # per-machine compose settings (e.g. IMU_I2C_BUS)
 .env
+
+# simulator test outputs (tools/sim_test)
+tools/sim_test/results/
