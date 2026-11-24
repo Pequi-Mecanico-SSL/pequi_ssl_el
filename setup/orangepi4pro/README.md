@@ -7,7 +7,7 @@ SPI3 on pins 19/21/23/24 and PD23 on pin 22 (the Pi's GPIO25).
 | Function            | Raspberry Pi 4          | Orange Pi 4 Pro                |
 |---------------------|-------------------------|--------------------------------|
 | IMU (I2C, pins 3/5) | `/dev/i2c-1`            | `/dev/i2c-0` (`IMU_I2C_BUS=0` in `.env`) |
-| CAN HAT (SPI CS0)   | `mcp2515-can0` overlay  | `mcp2515-can0.dts` user overlay |
+| CAN HAT (SPI CS0)   | `mcp2515-can0` overlay  | `mcp2515-can0.dts` merged into the DTB |
 | Compose             | `docker-compose`        | `docker compose`               |
 
 ## Kernel with CAN
@@ -31,14 +31,32 @@ Stock kernel, initrd and modules are kept as `/boot/*.stock` and `/lib/modules/$
 
 ## Overlays and CAN interface
 
+The i2c0 and MCP2515 overlays are merged into the DTB instead of listed in `overlays=` /
+`user_overlays=`: the vendor U-Boot (2018.07) misreads the small `.dtbo` files from the SD
+card on some boots, which silently leaves `can0` and `/dev/i2c-0` missing.
+
 ```sh
 dtc -@ -I dts -O dtb -o /boot/overlay-user/mcp2515-can0.dtbo mcp2515-can0.dts
-# /boot/orangepiEnv.txt
-overlays=i2c0
-user_overlays=mcp2515-can0
+D=/boot/dtb/allwinner
+fdtoverlay -i $D/sun60i-a733-orangepi-4-pro.dtb -o $D/sun60i-a733-orangepi-4-pro-ssl.dtb \
+    $D/overlay/sun60i-a733-i2c0.dtbo /boot/overlay-user/mcp2515-can0.dtbo
+# /boot/orangepiEnv.txt, with no overlays= / user_overlays= lines
+fdtfile=allwinner/sun60i-a733-orangepi-4-pro-ssl.dtb
 
 cp can0.service /etc/systemd/system/ && systemctl enable can0.service
 apt install can-utils i2c-tools
+```
+
+## Crash recorder
+
+`/var/log` (journal included) lives in RAM and only reaches the SD card on a clean shutdown,
+so a hang or power loss leaves no trace. `blackbox.service` copies the journal and a 5 s
+heartbeat (uptime, load, max temperature, free memory, can0) to `/var/lib/blackbox/`, one
+file per boot, last 30 boots kept.
+
+```sh
+cp blackbox.sh /usr/local/sbin/ && cp blackbox.service /etc/systemd/system/
+systemctl enable --now blackbox.service
 ```
 
 ## Joystick (RadioMaster Boxer, BLE)

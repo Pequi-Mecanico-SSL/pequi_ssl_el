@@ -1,0 +1,9 @@
+[Unit]
+Description=Crash recorder (journal + heartbeat synced to the SD card)
+
+[Service]
+ExecStart=/usr/local/sbin/blackbox.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
