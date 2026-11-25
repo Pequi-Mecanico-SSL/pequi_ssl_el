@@ -14,6 +14,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Empty
@@ -54,7 +55,8 @@ class VelocityController(Node):
         self.last_active_time = None
 
         self.pub = self.create_publisher(Twist, 'cmd_vel_corrected', 10)
-        self.create_subscription(Twist, 'cmd_vel', self.cmd_callback, 10)
+        # best effort: a command lost on the Wi-Fi is dropped, never delivered late (reliable delivery stalls, then replays stale commands)
+        self.create_subscription(Twist, "cmd_vel", self.cmd_callback, qos_profile_sensor_data)
         self.create_subscription(Imu, 'imu', self.imu_callback, 50)
         self.create_subscription(Empty, 'wheels/estop', self.reset_hold, 10)
         self.create_subscription(Empty, 'wheels/enable', self.reset_hold, 10)
