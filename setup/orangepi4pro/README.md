@@ -59,19 +59,26 @@ cp blackbox.sh /usr/local/sbin/ && cp blackbox.service /etc/systemd/system/
 systemctl enable --now blackbox.service
 ```
 
-## Wi-Fi: no background scans
+## Wi-Fi: no background scans while connected
 
-By default the Wi-Fi profile scans for other access points in the background (every 300 s, every 30 s with a weak
-signal). Each scan takes the radio off its channel and stalls the link to the strategy computer for up to seconds. Lock
-the profile to the access point and turn power saving off, once, while connected to the network the robot plays on:
+NetworkManager gives every Wi-Fi profile without a fixed BSSID background scanning (`bgscan "simple:30:-65:300"`: a scan
+every 300 s, every 30 s with a weak signal). Each scan takes the radio off its channel for a moment, which shows as a
+latency spike on the link to the strategy computer (worst ping 170 ms with a scan every 5 s, 80-125 ms without, on the
+team router). Two files turn that off, and Wi-Fi power saving with it, for every network the robot joins:
 
 ```sh
-sudo setup/orangepi4pro/wifi-lock.sh
+sudo install -m 755 setup/orangepi4pro/50-wifi-no-bgscan /etc/NetworkManager/dispatcher.d/
+sudo install -m 644 setup/orangepi4pro/wifi-powersave-off.conf /etc/NetworkManager/conf.d/
+sudo nmcli general reload conf
+sudo nmcli con up <profile>        # reconnect once so both take effect
 ```
 
-Check: `nmcli -f 802-11-wireless.bssid,802-11-wireless.powersave con show <profile>` shows the access point's address
-and `disable`, and `sudo wpa_cli -i wlan0 get_network 0 bgscan` answers `FAIL` (not set). Run it again after changing
-the router or its channel band; to undo, set `802-11-wireless.bssid ""`.
+`50-wifi-no-bgscan` runs each time a Wi-Fi interface comes up and clears the background-scan setting of the network just
+joined. Nothing is pinned: the robot still finds and joins any known network (another router, a phone hotspot), and
+after losing the link it scans as usual until it is connected again.
+
+Check: `sudo wpa_cli -i wlan0 get_network 0 bgscan` answers `""`, `journalctl -t wifi-no-bgscan` has a line per
+connection, and the driver's scan count stays put: `sudo dmesg | grep -c rwnx_cfg80211_scan`.
 
 ## Joystick (RadioMaster Boxer, BLE)
 

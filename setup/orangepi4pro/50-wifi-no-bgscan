@@ -1,0 +1,21 @@
+#!/bin/sh
+# NetworkManager dispatcher script: when a Wi-Fi interface comes up, turn off wpa_supplicant's background scanning for
+# the network it has just joined. Finding and joining networks is not affected: once the link is lost the usual scans
+# run again, and this script runs again on the next connection.
+#
+# Why: NetworkManager gives every profile without a fixed BSSID the setting bgscan "simple:30:-65:300" (a scan every
+# 300 s, every 30 s when the signal is below -65 dBm). During a scan the radio leaves its channel, a latency spike on
+# the link to the strategy computer.
+#
+# Install: /etc/NetworkManager/dispatcher.d/50-wifi-no-bgscan, owner root, mode 755.
+IF="$1"; ACTION="$2"
+[ "$ACTION" = "up" ] || exit 0
+[ -d "/sys/class/net/$IF/wireless" ] || [ -e "/sys/class/net/$IF/phy80211" ] || exit 0
+for try in 1 2 3 4 5; do
+    ID=$(wpa_cli -i "$IF" list_networks 2>/dev/null | awk -F'\t' '$4 ~ /CURRENT/ {print $1}')
+    [ -n "$ID" ] && break
+    sleep 1
+done
+[ -n "$ID" ] || { logger -t wifi-no-bgscan "$IF: no current network in wpa_supplicant"; exit 0; }
+wpa_cli -i "$IF" set_network "$ID" bgscan '""' > /dev/null 2>&1
+logger -t wifi-no-bgscan "$IF: background scanning off for network $ID ($(wpa_cli -i "$IF" get_network "$ID" ssid 2>/dev/null))"
