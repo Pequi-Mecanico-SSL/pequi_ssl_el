@@ -1,12 +1,14 @@
 """Bridge between ROS 2 wheel-velocity topics and the motor CAN bus.
 
 Talks to the four B-G431B-ESC1 boards using the protocol defined in
-stm32-motor-controller/PROTOCOL.md. The ESCs run their own velocity PID;
+stm32-motor-controller/PROTOCOL.md. The ESCs run their own velocity loop;
 this node only streams setpoints and republishes telemetry.
 
 Topics:
   wheels/cmd    (Float32MultiArray, in)  4x wheel velocity target, rad/s
-  wheels/state  (JointState, out)        measured velocity (rad/s) + Iq (A)
+  wheels/state  (JointState, out)        measured velocity (rad/s), Iq (A) and,
+                                         from firmware 8 on, wheel angle (rad,
+                                         continuous since the bridge started)
   wheels/estop  (Empty, in)             broadcast ESTOP, latches until enable
   wheels/enable (Empty, in)             re-enable all motors, clears estop
 """
@@ -24,7 +26,10 @@ ID_ESTOP, ID_SETPOINT, ID_CMD, ID_TLM, ID_HELLO = 0x000, 0x080, 0x100, 0x200, 0x
 (OP_STOP, OP_VEL, OP_ENABLE, OP_DISABLE, OP_CURLIM,
  OP_TELEM, OP_TERM, OP_PING, OP_WATCHDOG, OP_GAIN) = range(10)
 GAIN_VEL_KP, GAIN_VEL_KI = 0, 1
-FLAG_ENABLED, FLAG_FOC_OK, FLAG_WD_TRIPPED = 1, 2, 4
+FLAG_ENABLED, FLAG_READY, FLAG_WD_TRIPPED, FLAG_FAULT = 1, 2, 4, 8
+FAULTS = ('none', 'encoder', 'overcurrent', 'undervoltage', 'overvoltage',
+          'not calibrated', 'current sense')
+POS_TO_RAD = 2 * math.pi / 4096
 
 
 class CanBridge(Node):
@@ -38,8 +43,8 @@ class CanBridge(Node):
         # ESC velocity-loop tuning, pushed on startup and on ESC reboot
         # (values are volatile on the ESC side); 0 = keep firmware default
         self.declare_parameter('current_limit_a', 1.3)
-        self.declare_parameter('vel_pid_kp', 0.04)
-        self.declare_parameter('vel_pid_ki', 0.15)
+        self.declare_parameter('vel_pid_kp', 0.0)
+        self.declare_parameter('vel_pid_ki', 0.0)
 
         iface = self.get_parameter('can_interface').value
         self.telemetry_period_ms = int(self.get_parameter('telemetry_period_ms').value)
@@ -63,13 +68,18 @@ class CanBridge(Node):
         self.estopped = False
         self.telem = {}       # id -> (vel, iq_a, flags, stamp)
         self.last_flags = {}
+        self.fw = {}          # id -> firmware version, from its hello
+        self.pos_raw = {}     # id -> last wheel angle word
+        self.pos = {}         # id -> unwrapped wheel angle, rad
 
         self.state_pub = self.create_publisher(JointState, 'wheels/state', 10)
         self.create_subscription(Float32MultiArray, 'wheels/cmd', self.cmd_callback, 10)
         self.create_subscription(Empty, 'wheels/estop', self.estop_callback, 10)
         self.create_subscription(Empty, 'wheels/enable', self.enable_callback, 10)
 
+        self.start_time = self.get_clock().now()
         for i in range(N_MOTORS):
+            self.send_cmd(i, OP_PING)   # its hello tells the firmware version
             self.configure_motor(i)
 
         self.create_timer(0.005, self.poll_can)
@@ -169,6 +179,7 @@ class CanBridge(Node):
             fresh = entry and (now - entry[3]).nanoseconds / 1e9 < 1.0
             msg.velocity.append(entry[0] if fresh else math.nan)
             msg.effort.append(entry[1] if fresh else math.nan)
+            msg.position.append(self.pos[i] if fresh and i in self.pos else math.nan)
             if not fresh:
                 self.get_logger().warning(f'motor {i}: telemetry stale',
                                           throttle_duration_sec=5.0)
@@ -182,30 +193,55 @@ class CanBridge(Node):
         data = data[:dlc]
         if ID_TLM <= can_id < ID_TLM + N_MOTORS and dlc >= 8:
             i = can_id - ID_TLM
-            vel, _tgt, iq, flags, _uq = struct.unpack('<hhhBb', data)
+            # firmware < 8 has the target in the angle field and Uq in the fault field
+            vel, pos, iq, flags, fault = struct.unpack('<hHhBB', data)
             self.telem[i] = (vel / 100.0, iq / 1000.0, flags, self.get_clock().now())
-            self.check_flags(i, flags)
+            if self.fw.get(i, 0) >= 8:
+                if i in self.pos_raw:
+                    step = (pos - self.pos_raw[i] + 0x8000) % 0x10000 - 0x8000
+                    self.pos[i] += step * POS_TO_RAD
+                else:
+                    self.pos[i] = 0.0
+                self.pos_raw[i] = pos
+            else:
+                fault = 0
+            self.check_flags(i, flags, fault)
         elif ID_HELLO <= can_id < ID_HELLO + N_MOTORS and dlc >= 8:
             uid, fw, fl, mid, _ = struct.unpack('<IBBBB', data)
+            known = mid in self.fw
+            self.fw[mid] = fw
+            self.pos_raw.pop(mid, None)
+            if fw >= 8:
+                status = (f"current sense {'ok' if fl & 1 else 'FAIL'}, "
+                          f"{'calibrated' if fl & 2 else 'NOT CALIBRATED'}, "
+                          f"encoder {'ok' if fl & 4 else 'MISSING'}")
+            else:
+                status = f"cs={'ok' if fl & 1 else 'FAIL'} foc={'ok' if fl & 2 else 'FAIL'}"
+            if not known and (self.get_clock().now() - self.start_time).nanoseconds < 2e9:
+                # answer to our ping at startup: already configured
+                self.get_logger().info(f'motor {mid}: uid=0x{uid:08X} fw={fw}, {status}')
+                return
             self.get_logger().warning(
-                f'motor {mid} rebooted (uid=0x{uid:08X} fw={fw} '
-                f"cs={'ok' if fl & 1 else 'FAIL'} foc={'ok' if fl & 2 else 'FAIL'}), "
-                'reconfiguring')
+                f'motor {mid} booted (uid=0x{uid:08X} fw={fw}, {status}), configuring')
             self.configure_motor(mid)
 
-    def check_flags(self, i, flags):
+    def check_flags(self, i, flags, fault):
         prev = self.last_flags.get(i)
-        self.last_flags[i] = flags
-        if flags == prev:
+        self.last_flags[i] = (flags, fault)
+        if (flags, fault) == prev:
             return
-        if not flags & FLAG_FOC_OK:
-            self.get_logger().error(f'motor {i}: initFOC failed')
-        if flags & FLAG_WD_TRIPPED and not (prev or 0) & FLAG_WD_TRIPPED:
+        prev_flags = prev[0] if prev else 0
+        if fault and (prev is None or fault != prev[1]):
+            name = FAULTS[fault] if fault < len(FAULTS) else fault
+            self.get_logger().error(f'motor {i}: fault: {name} (wheels/enable to retry)')
+        elif not flags & FLAG_READY and (prev is None or prev_flags & FLAG_READY):
+            self.get_logger().error(f'motor {i}: not ready (calibration / encoder / current sense)')
+        if flags & FLAG_WD_TRIPPED and not prev_flags & FLAG_WD_TRIPPED:
             if self.estopped:
                 return
             self.get_logger().warning(f'motor {i}: watchdog tripped, re-enabling')
             self.send_cmd(i, OP_ENABLE)
-        elif prev is not None and not flags & FLAG_ENABLED and (prev & FLAG_ENABLED):
+        elif prev is not None and not flags & FLAG_ENABLED and (prev_flags & FLAG_ENABLED):
             self.get_logger().warning(f'motor {i}: disabled')
 
     def shutdown(self):
