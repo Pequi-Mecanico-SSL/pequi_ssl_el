@@ -7,8 +7,8 @@ negative = estop.
 
 scale_trans is the translation speed at full deflection for both x and y
 (stick right maps to -y per REP 103). scale_w is signed: a negative value
-inverts the control. Publishes zeros while sticks are centered so the bridge
-deadman stays fed; on device loss it publishes zeros and keeps retrying.
+inverts the control. Publishes only while a stick is deflected, plus a short
+stop command after release, so other cmd_vel sources can drive the robot.
 """
 import struct
 import threading
@@ -49,6 +49,7 @@ class Teleop(Node):
         self.axes = {}
         self.arm_state = None
         self.connected = False
+        self.last_active = float('-inf')
         self.lock = threading.Lock()
 
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -108,7 +109,11 @@ class Teleop(Node):
         msg.linear.x = self.axis('x') * self.scales['x']
         msg.linear.y = self.axis('y') * self.scales['y']
         msg.angular.z = self.axis('w') * self.scales['w']
-        self.cmd_pub.publish(msg)
+        now = time.monotonic()
+        if msg.linear.x or msg.linear.y or msg.angular.z:
+            self.last_active = now
+        if now - self.last_active < 0.5:
+            self.cmd_pub.publish(msg)
 
 
 def main(args=None):

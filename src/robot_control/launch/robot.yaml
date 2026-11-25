@@ -1,9 +1,17 @@
 launch:
 
+# robot model: a file of config/ (wheel layout, motor count, tuning)
+- arg:
+    name: "config"
+    default: "$(find-pkg-share robot_control)/config/$(env ROBOT_CONFIG four_wheel).yaml"
+
 - node:
     pkg: "robot_control"
     exec: "can_bridge"
     name: "can_bridge"
+    param:
+    -
+        from: "$(var config)"
     respawn: "true"
     respawn_delay: 1.0
 
@@ -12,6 +20,8 @@ launch:
     exec: "imu"
     name: "imu"
     param:
+    -
+        from: "$(var config)"
     -
         name: "i2c_bus"
         value: "$(env IMU_I2C_BUS 1)"
@@ -22,11 +32,17 @@ launch:
     pkg: "robot_control"
     exec: "velocity_controller"
     name: "velocity_controller"
+    param:
+    -
+        from: "$(var config)"
 
 - node:
     pkg: "robot_control"
     exec: "kinematics"
     name: "kinematics"
+    param:
+    -
+        from: "$(var config)"
     remap:
     -
         from: "cmd_vel"
@@ -36,3 +52,6 @@ launch:
     pkg: "robot_control"
     exec: "teleop"
     name: "teleop"
+    param:
+    -
+        from: "$(var config)"

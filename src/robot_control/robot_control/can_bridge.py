@@ -1,11 +1,11 @@
 """Bridge between ROS 2 wheel-velocity topics and the motor CAN bus.
 
-Talks to the four B-G431B-ESC1 boards using the protocol defined in
+Talks to the B-G431B-ESC1 boards (motor ids 0..n_motors-1) using the protocol defined in
 stm32-motor-controller/PROTOCOL.md. The ESCs run their own velocity loop;
 this node only streams setpoints and republishes telemetry.
 
 Topics:
-  wheels/cmd    (Float32MultiArray, in)  4x wheel velocity target, rad/s
+  wheels/cmd    (Float32MultiArray, in)  wheel velocity targets, rad/s
   wheels/state  (JointState, out)        measured velocity (rad/s), Iq (A) and,
                                          from firmware 8 on, wheel angle (rad,
                                          continuous since the bridge started)
@@ -21,7 +21,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Empty, Float32MultiArray
 
-N_MOTORS = 4
+MAX_MOTORS = 4   # slots in the setpoint frame
 ID_ESTOP, ID_SETPOINT, ID_CMD, ID_TLM, ID_HELLO = 0x000, 0x080, 0x100, 0x200, 0x300
 (OP_STOP, OP_VEL, OP_ENABLE, OP_DISABLE, OP_CURLIM,
  OP_TELEM, OP_TERM, OP_PING, OP_WATCHDOG, OP_GAIN) = range(10)
@@ -36,6 +36,7 @@ class CanBridge(Node):
     def __init__(self):
         super().__init__('can_bridge')
         self.declare_parameter('can_interface', 'can0')
+        self.declare_parameter('n_motors', 4)
         self.declare_parameter('telemetry_period_ms', 20)
         self.declare_parameter('watchdog_ms', 500)
         self.declare_parameter('setpoint_rate_hz', 50.0)
@@ -47,6 +48,7 @@ class CanBridge(Node):
         self.declare_parameter('vel_pid_ki', 0.0)
 
         iface = self.get_parameter('can_interface').value
+        self.n_motors = min(MAX_MOTORS, int(self.get_parameter('n_motors').value))
         self.telemetry_period_ms = int(self.get_parameter('telemetry_period_ms').value)
         self.watchdog_ms = int(self.get_parameter('watchdog_ms').value)
         setpoint_rate = float(self.get_parameter('setpoint_rate_hz').value)
@@ -63,7 +65,7 @@ class CanBridge(Node):
         self.sock.bind((iface,))
         self.sock.setblocking(False)
 
-        self.targets = [0.0] * N_MOTORS
+        self.targets = [0.0] * self.n_motors
         self.last_cmd_time = None
         self.estopped = False
         self.telem = {}       # id -> (vel, iq_a, flags, stamp)
@@ -78,7 +80,7 @@ class CanBridge(Node):
         self.create_subscription(Empty, 'wheels/enable', self.enable_callback, 10)
 
         self.start_time = self.get_clock().now()
-        for i in range(N_MOTORS):
+        for i in range(self.n_motors):
             self.send_cmd(i, OP_PING)   # its hello tells the firmware version
             self.configure_motor(i)
 
@@ -114,17 +116,18 @@ class CanBridge(Node):
 
     def send_setpoints(self, targets):
         ints = [max(-32767, min(32767, round(v * 100))) for v in targets]
+        ints += [0] * (MAX_MOTORS - len(ints))
         self.send(ID_SETPOINT, struct.pack('<4h', *ints))
 
     # ---- subscriptions ----
 
     def cmd_callback(self, msg):
         vals = list(msg.data)
-        if len(vals) != N_MOTORS:
+        if len(vals) != self.n_motors:
             self.get_logger().warning(
-                f'wheels/cmd has {len(vals)} values, expected {N_MOTORS}',
+                f'wheels/cmd has {len(vals)} values, expected {self.n_motors}',
                 throttle_duration_sec=5.0)
-            vals = (vals + [0.0] * N_MOTORS)[:N_MOTORS]
+            vals = (vals + [0.0] * self.n_motors)[:self.n_motors]
         self.targets = [float(v) for v in vals]
         self.last_cmd_time = self.get_clock().now()
         if not self.estopped:
@@ -132,13 +135,13 @@ class CanBridge(Node):
 
     def estop_callback(self, _):
         self.estopped = True
-        self.targets = [0.0] * N_MOTORS
+        self.targets = [0.0] * self.n_motors
         self.send(ID_ESTOP)
         self.get_logger().warning('ESTOP: all motors disabled (wheels/enable to clear)')
 
     def enable_callback(self, _):
         self.estopped = False
-        for i in range(N_MOTORS):
+        for i in range(self.n_motors):
             self.send_cmd(i, OP_ENABLE)
         self.get_logger().info('all motors enabled')
 
@@ -152,7 +155,7 @@ class CanBridge(Node):
             if age > self.cmd_timeout and any(self.targets):
                 self.get_logger().warning(
                     f'no wheels/cmd for {age:.1f}s, zeroing targets')
-                self.targets = [0.0] * N_MOTORS
+                self.targets = [0.0] * self.n_motors
         self.send_setpoints(self.targets)
 
     def poll_can(self):
@@ -173,7 +176,7 @@ class CanBridge(Node):
         now = self.get_clock().now()
         msg = JointState()
         msg.header.stamp = now.to_msg()
-        for i in range(N_MOTORS):
+        for i in range(self.n_motors):
             msg.name.append(f'wheel_{i}')
             entry = self.telem.get(i)
             fresh = entry and (now - entry[3]).nanoseconds / 1e9 < 1.0
@@ -191,7 +194,7 @@ class CanBridge(Node):
         can_id, dlc, data = struct.unpack('<IB3x8s', raw)
         can_id &= socket.CAN_EFF_MASK
         data = data[:dlc]
-        if ID_TLM <= can_id < ID_TLM + N_MOTORS and dlc >= 8:
+        if ID_TLM <= can_id < ID_TLM + self.n_motors and dlc >= 8:
             i = can_id - ID_TLM
             # firmware < 8 has the target in the angle field and Uq in the fault field
             vel, pos, iq, flags, fault = struct.unpack('<hHhBB', data)
@@ -206,7 +209,7 @@ class CanBridge(Node):
             else:
                 fault = 0
             self.check_flags(i, flags, fault)
-        elif ID_HELLO <= can_id < ID_HELLO + N_MOTORS and dlc >= 8:
+        elif ID_HELLO <= can_id < ID_HELLO + self.n_motors and dlc >= 8:
             uid, fw, fl, mid, _ = struct.unpack('<IBBBB', data)
             known = mid in self.fw
             self.fw[mid] = fw
