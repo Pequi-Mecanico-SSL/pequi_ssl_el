@@ -59,6 +59,20 @@ cp blackbox.sh /usr/local/sbin/ && cp blackbox.service /etc/systemd/system/
 systemctl enable --now blackbox.service
 ```
 
+## Wi-Fi: no background scans
+
+By default the Wi-Fi profile scans for other access points in the background (every 300 s, every 30 s with a weak
+signal). Each scan takes the radio off its channel and stalls the link to the strategy computer for up to seconds. Lock
+the profile to the access point and turn power saving off, once, while connected to the network the robot plays on:
+
+```sh
+sudo setup/orangepi4pro/wifi-lock.sh
+```
+
+Check: `nmcli -f 802-11-wireless.bssid,802-11-wireless.powersave con show <profile>` shows the access point's address
+and `disable`, and `sudo wpa_cli -i wlan0 get_network 0 bgscan` answers `FAIL` (not set). Run it again after changing
+the router or its channel band; to undo, set `802-11-wireless.bssid ""`.
+
 ## Joystick (RadioMaster Boxer, BLE)
 
 The agent must live in the same `bluetoothctl` session as `pair`, otherwise pairing fails
