@@ -491,8 +491,13 @@ def test_a_series_step_gets_the_home_area_less_its_open_edges_for_the_way_to_eac
     s, *_ = make([SPIN()], home=None)
     assert "SOLO_GOTO_BOX" not in s.env_for(st)
 
-def test_a_series_goto_box_outside_the_drive_area_is_refused_at_load():
-    steps = [dict(kind="series", plan="missing.jsonl", env={"SOLO_GOTO_BOX": "-0.3,0.5,-1,1"}, label="over the open edge")]
+def test_a_series_goto_box_outside_the_drive_area_and_a_non_numeric_brake_first_are_refused_at_load():
+    steps = [dict(kind="series", plan="missing.jsonl", env={"SOLO_GOTO_BOX": "-0.3,0.5,-1,1"}, label="over the open edge"),
+             dict(SPIN(label="brake first"), env={"SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "fast"})]
     s, run, note, *_ = make(steps)
     assert steps[0]["_refused"] == ("SOLO_GOTO_BOX -0.3,0.5,-1,1 does not intersect the area of the drive to a test's start "
                                     "-2.2,-0.35,-1.45,1.45 (the home area less 0.25 m at its open edges)")
+    assert steps[1]["_refused"] == "SOLO_BRAKE_FIRST 'fast' is not a number (m/s^2)"
+    assert s.env_for(steps[1])["SOLO_BRAKE"] == "auto"                                                 # no exception
+    s, *_ = make([dict(SPIN(), env={"SOLO_BRAKE_FIRST": "x"})], home=None)
+    assert s.steps[0]["_refused"].startswith("SOLO_BRAKE_FIRST 'x'")                                 # also without a home area

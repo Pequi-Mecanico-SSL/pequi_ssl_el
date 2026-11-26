@@ -102,7 +102,7 @@ non-zero exit, a result line marked interrupted or aborted, e.g. "robot not in v
 no ban, the reason in the log (`probe_verdict`), the next probe not before 10 s. A child that ends with a Python
 exception (its last line, e.g. "ValueError: ...") twice in a row with the same message is a set-up fault: probing
 ends for the session, with one alert naming the message. The probe child's braking settings are its own, whatever
-the header or the step set: `SOLO_BRAKE` 1.5, `SOLO_RAMP` 0, `SOLO_BRAKE_FIRST` and `SOLO_BRAKE_BOX` unset,
+the header or the step set: `SOLO_BRAKE` 1.5, `SOLO_RAMP` 0, `SOLO_SETTLE` 1.5, `SOLO_BRAKE_FIRST` and `SOLO_BRAKE_BOX` unset,
 `SOLO_BOX` a 0.5 m box around the candidate; a `test` step with `SOLO_BRAKE=auto` gets `SOLO_BRAKE_FIRST` (0.8 when
 unset), as `series.py` does before any braking is measured. At most `--probes` (6) per session,
 those without a verdict included (the alert when none is left says how many gave no verdict and the last reason);

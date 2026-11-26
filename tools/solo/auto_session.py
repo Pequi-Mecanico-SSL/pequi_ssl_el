@@ -313,6 +313,11 @@ def placer_can(b, target):
     except Exception:
         return None
 
+def num(v):
+    """float(v), or None when v is not a number"""
+    try: return float(v)
+    except (TypeError, ValueError): return None
+
 def rects(spec):
     return [[float(v) for v in r.split(",")] for r in spec.split(";") if r.strip()] if spec else []
 
@@ -1442,6 +1447,7 @@ class Session:
     PROBE_BAD_S, PROBE_BAD_D = 60.0, 0.3   # no new probe of a candidate within this of a failed one for this long
     PROBE_RETRY = 10.0                  # s: no new probe this long after one whose child did not complete its turn
     PROBE_BRAKE = "1.5"                 # m/s^2: SOLO_BRAKE of the probe child (characterize.py's default)
+    PROBE_SETTLE = "1.5"                # s: SOLO_SETTLE of the probe child (characterize.py's default)
     PROBE_EXC = re.compile(r"^(?:[A-Za-z_][\w.]*\.)?[A-Za-z_]\w*(?:Error|Exception)(?::|$)")   # a Python exception's last line
     PROBE_EXC_N = 2                     # probe children failing with the same exception in a row: probing ends
     def candidate(self, s):
@@ -1498,9 +1504,10 @@ class Session:
     def probe_step(self, rate, box):
         """the probe child as a step: characterize.py spin <rate> <time> (open loop: only an angular rate, zeros before
         and after; it stops on its own when the pose it reads is stale or leaves SOLO_BOX). Its braking and ramp
-        settings are set here whatever the header or the step set: SOLO_BRAKE PROBE_BRAKE, SOLO_RAMP 0,
+        settings are set here whatever the header or the step set: SOLO_BRAKE PROBE_BRAKE, SOLO_RAMP 0, SOLO_SETTLE PROBE_SETTLE,
         SOLO_BRAKE_FIRST and SOLO_BRAKE_BOX removed, SOLO_BOX the small box around the candidate"""
-        env = {"SOLO_BOX": box, "SOLO_BRAKE": self.PROBE_BRAKE, "SOLO_RAMP": "0", "SOLO_BRAKE_FIRST": None, "SOLO_BRAKE_BOX": None}
+        env = {"SOLO_BOX": box, "SOLO_BRAKE": self.PROBE_BRAKE, "SOLO_RAMP": "0", "SOLO_SETTLE": self.PROBE_SETTLE,
+               "SOLO_BRAKE_FIRST": None, "SOLO_BRAKE_BOX": None}
         return dict(kind="test", test="spin", args=[f"{rate:+.2f}", f"{self.probe_time:.2f}"], env=env,
                     label="identity probe", timeout=15.0)
     def probe(self, c):
@@ -1760,8 +1767,10 @@ class Session:
                 unknown = sorted(n for n in names if n not in solo_procs.NODE_PARAMS)
                 if unknown: why = f"node parameters the node does not declare: {', '.join(unknown)}"
                 elif st.get("side") not in (None, "negative", "positive", "auto"): why = f"side {st.get('side')!r}: negative, positive or auto"
-            if st["kind"] == "series" and self.home is not None and not why:
-                why = self.goto_box(self.given_env(st).get("SOLO_GOTO_BOX"))[1]
+            if st["kind"] in ("test", "series") and not why:
+                g = self.given_env(st); bf = g.get("SOLO_BRAKE_FIRST")
+                if bf and num(bf) is None: why = f"SOLO_BRAKE_FIRST {bf!r} is not a number (m/s^2)"
+                elif st["kind"] == "series" and self.home is not None: why = self.goto_box(g.get("SOLO_GOTO_BOX"))[1]
             if st["kind"] in MOTION and not why:
                 bx, err = self.step_boxes(st); st["_boxes"] = bx
                 if self.home is not None:
@@ -2349,8 +2358,8 @@ class Session:
         the area its robot may cross on the way to each test's start: with a home area always goto_box (the current
         home area after a switch of halves), without one the header's SOLO_BOX unless the step or the header sets it"""
         env = self.given_env(st)
-        if st.get("kind") == "test" and env.get("SOLO_BRAKE") == "auto":
-            env["SOLO_BRAKE"] = str(float(env.get("SOLO_BRAKE_FIRST") or "0.8"))
+        if st.get("kind") == "test" and env.get("SOLO_BRAKE") == "auto" and num(env.get("SOLO_BRAKE_FIRST") or "0.8") is not None:
+            env["SOLO_BRAKE"] = str(float(env.get("SOLO_BRAKE_FIRST") or "0.8"))        # a non-number is refused at load
         if st.get("kind") == "series" and self.home is not None:            # the way to each test's start (series.py)
             env["SOLO_GOTO_BOX"] = self.goto_box(env.get("SOLO_GOTO_BOX"))[0]
         elif st.get("kind") == "series" and not env.get("SOLO_GOTO_BOX"):

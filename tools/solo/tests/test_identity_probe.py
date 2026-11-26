@@ -246,15 +246,15 @@ def test_probes_without_a_verdict_count_and_the_last_alert_says_how_many_and_why
 
 def test_the_probe_child_gets_its_own_braking_settings_whatever_the_session_header_sets():
     head = {"kind": "session", "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2",
-                                       "SOLO_RAMP": "0.8", "SOLO_BRAKE_BOX": "-2.0,-0.5,-1.0,1.0"}}
+                                       "SOLO_RAMP": "0.8", "SOLO_BRAKE_BOX": "-2.0,-0.5,-1.0,1.0", "SOLO_SETTLE": "0.4"}}
     s, run, note, world, clk = make_cams([SPIN(label="a")], lambda t: {0: [OURS]}, head=head)
     st = s.probe_step(1.5, "-1.25,-0.75,-0.25,0.25")
     s.run_step(st, watch=lambda: None); env = run.calls[-1]["env"]
     assert " spin +1.50 0.70 " in run.calls[-1]["cmd"]
     assert env["SOLO_BRAKE"] == "1.5" and env["SOLO_RAMP"] == "0" and env["SOLO_BOX"] == "-1.25,-0.75,-0.25,0.25"
-    assert "SOLO_BRAKE_FIRST" not in env and "SOLO_BRAKE_BOX" not in env
+    assert "SOLO_BRAKE_FIRST" not in env and "SOLO_BRAKE_BOX" not in env and env["SOLO_SETTLE"] == "1.5"
     s.run_step(SPIN(label="b"), watch=lambda: None); env = run.calls[-1]["env"]      # a test step: auto as series.py resolves it
-    assert env["SOLO_BRAKE"] == "1.2" and env["SOLO_RAMP"] == "0.8" and env["SOLO_BOX"] == "-1.4,-0.6,-0.4,0.4"
+    assert env["SOLO_BRAKE"] == "1.2" and env["SOLO_RAMP"] == "0.8" and env["SOLO_BOX"] == "-1.4,-0.6,-0.4,0.4" and env["SOLO_SETTLE"] == "0.4"
 
 def test_two_probe_children_failing_with_the_same_exception_end_probing_with_one_alert():
     exc = "ValueError: could not convert string to float: 'auto'"
