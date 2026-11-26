@@ -33,7 +33,7 @@ Environment variables:
 | `SOLO_CMD_TOPIC`, `SOLO_CMD_RELIABLE` | optional | velocity topic of the test tools (default `/cmd_vel`); set `SOLO_CMD_RELIABLE` for a reliable publisher |
 | `SOLO_BOX`, `SOLO_BRAKE`, `SOLO_BRAKE_BOX`, `SOLO_BRAKE_FIRST`, `SOLO_SETTLE`, `SOLO_RAMP` | optional | test area and braking of `characterize.py`, `series.py` and `place_ball.py` (see their docstrings) |
 | `SOLO_EXTRA_GROUPS`, `SOLO_EXTRA_IFACE` | optional | additional multicast groups for `listen.py` (empty by default) |
-| `SOLO_NOTIFY_CMD` | required by `auto_session.py` with a home area, else optional | an executable called as `CMD "message" "title"` for its alerts (a failing call is tried once more); unset, alerts are only printed. A session with a home area sends "session starting: ..." in its start check and starts only when the command exits 0 |
+| `SOLO_NOTIFY_CMD` | required by `auto_session.py` with a home area, else optional | an executable called as `CMD "message" "title"` for its alerts (a failing call is tried once more); unset, alerts are only printed. A session with a home area sends "session starting: ..." in its start check and starts only when the command exits 0; later alerts go out from a queue in the background (retried with backoff, never delaying a stop), and when none has been delivered for `--alert-dead` s (300) no motion step runs until one is |
 | `SOLO_PYTHON` | optional | the Python `auto_session.py` runs its steps with (default `python3`) |
 
 Usual start sequence:
