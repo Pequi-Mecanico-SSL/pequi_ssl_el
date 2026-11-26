@@ -1,0 +1,46 @@
+# A 20-minute session: the steps of short_10.jsonl first, then more rams, spins and push-outs.
+# P: folder of the series plans named below (default: plans/ next to this file); OUT: folder of the logs and results
+# (default $SOLO_DATA/sessions).
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/short_20.jsonl --budget 20 [--var P=DIR] [--var OUT=DIR]
+{"kind": "session", "name": "short_20", "budget_min": 20, "vars": {"P": "${SESSION_DIR}/plans", "OUT": "${SOLO_DATA}/sessions"}, "env": {"SOLO_BOX": "-2.2,2.2,-1.4,1.4", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
+{"kind": "marker", "label": "start marker", "text": "short session start (auto_session)", "data": "use"}
+{"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}
+{"kind": "place", "label": "ball parked off the test lane", "x": 1.2, "y": -0.8, "group": "park"}
+{"kind": "series", "label": "reference runs and ramped steps (the first 8 tests of steps_ramped)", "plan": "${P}/steps_ramped.jsonl", "max": 8, "args": ["--out", "${OUT}/logs", "--results", "${OUT}/results.jsonl"], "env": {"SOLO_BOX": "", "SOLO_RAMP": "1.7"}, "keep_ball_out": "-2.0,2.0,0.25,1.0", "park": [1.2, -0.8], "timeout": 360, "on_fail": "alert"}
+{"kind": "place", "label": "ball for ram 1.2 >", "x": -0.85, "y": 0.65, "group": "r12a"}
+{"kind": "test", "label": "ram 1.2 >", "test": "ram", "args": [1.2, 0, 1.0, 0.25], "needs_ball": true, "group": "r12a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.2 <", "x": 0.85, "y": 0.65, "group": "r12b"}
+{"kind": "test", "label": "ram 1.2 <", "test": "ram", "args": [1.2, 180, 1.0, 0.25], "needs_ball": true, "group": "r12b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.5 >", "x": -0.85, "y": 0.65, "group": "r15a"}
+{"kind": "test", "label": "ram 1.5 >", "test": "ram", "args": [1.5, 0, 1.0, 0.25], "needs_ball": true, "group": "r15a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.5 <", "x": 0.85, "y": 0.65, "group": "r15b"}
+{"kind": "test", "label": "ram 1.5 <", "test": "ram", "args": [1.5, 180, 1.0, 0.25], "needs_ball": true, "group": "r15b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.0 >", "x": -0.85, "y": 0.65, "group": "r10a"}
+{"kind": "test", "label": "ram 1.0 >", "test": "ram", "args": [1.0, 0, 1.0, 0.25], "needs_ball": true, "group": "r10a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.0 <", "x": 0.85, "y": 0.65, "group": "r10b"}
+{"kind": "test", "label": "ram 1.0 <", "test": "ram", "args": [1.0, 180, 1.0, 0.25], "needs_ball": true, "group": "r10b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.5 >", "x": -0.85, "y": 0.65, "group": "r15c"}
+{"kind": "test", "label": "ram 1.5 >", "test": "ram", "args": [1.5, 0, 1.0, 0.25], "needs_ball": true, "group": "r15c", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for ram 1.5 <", "x": 0.85, "y": 0.65, "group": "r15d"}
+{"kind": "test", "label": "ram 1.5 <", "test": "ram", "args": [1.5, 180, 1.0, 0.25], "needs_ball": true, "group": "r15d", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-2.05,2.05,0.25,1.05"}, "out": "${OUT}/logs", "tee": "${OUT}/rams_short.log"}
+{"kind": "place", "label": "ball for push-out 1", "x": 1.9, "y": 0.0, "group": "push1"}
+{"kind": "strategy", "label": "push-out 1: strategy on 10 s", "on": true, "seconds": 10, "needs_ball": true, "group": "push1"}
+{"kind": "place", "label": "ball for push-out 2", "x": 1.85, "y": 0.45, "group": "push2"}
+{"kind": "strategy", "label": "push-out 2: strategy on 10 s", "on": true, "seconds": 10, "needs_ball": true, "group": "push2"}
+{"kind": "place", "label": "ball for push-out 3", "x": 1.85, "y": -0.45, "group": "push3"}
+{"kind": "strategy", "label": "push-out 3: strategy on 10 s", "on": true, "seconds": 10, "needs_ball": true, "group": "push3"}
+{"kind": "place", "label": "ball for keep-out before their area 1", "x": -1.5, "y": 0.0, "group": "keep1"}
+{"kind": "strategy", "label": "keep-out before their area 1: strategy on 12 s", "on": true, "seconds": 12, "needs_ball": true, "group": "keep1"}
+{"kind": "place", "label": "ball for keep-out before their area 2", "x": -1.55, "y": 0.35, "group": "keep2"}
+{"kind": "strategy", "label": "keep-out before their area 2: strategy on 12 s", "on": true, "seconds": 12, "needs_ball": true, "group": "keep2"}
+{"kind": "place", "label": "ball for keep-out before their area 3", "x": -1.45, "y": -0.3, "group": "keep3"}
+{"kind": "strategy", "label": "keep-out before their area 3: strategy on 12 s", "on": true, "seconds": 12, "needs_ball": true, "group": "keep3"}
+{"kind": "place", "label": "ball for dosed ram 1", "x": 0.6, "y": -0.4, "group": "dose1"}
+{"kind": "strategy", "label": "dosed ram 1: strategy on 20 s", "on": true, "seconds": 20, "needs_ball": true, "group": "dose1"}
+{"kind": "place", "label": "ball for dosed ram 2", "x": 0.9, "y": 0.0, "group": "dose2"}
+{"kind": "strategy", "label": "dosed ram 2: strategy on 20 s", "on": true, "seconds": 20, "needs_ball": true, "group": "dose2"}
+{"kind": "place", "label": "ball parked away from the spins", "x": 1.2, "y": -0.8, "group": "park2"}
+{"kind": "series", "label": "spins and gyro scale (spins from test 5)", "plan": "${P}/spins.jsonl", "from": 5, "args": ["--out", "${OUT}/logs", "--results", "${OUT}/results.jsonl"], "keep_ball_out": "0.6,1.4,0.2,1.0", "park": [1.2, -0.8], "timeout": 240, "on_fail": "alert"}
+{"kind": "series", "label": "reference runs again", "plan": "${P}/reference.jsonl", "args": ["--out", "${OUT}/logs", "--results", "${OUT}/results.jsonl"], "env": {"SOLO_RAMP": "1.7"}, "keep_ball_out": "-2.0,2.0,0.25,1.0", "park": [1.2, -0.8], "timeout": 120, "on_fail": "alert"}
+{"kind": "marker", "label": "end marker", "text": "short session end (auto_session)", "data": "skip", "final": true}
+{"kind": "cmd", "label": "save the robot log", "argv": ["${T}/robot_stack.sh", "save"], "final": true, "timeout": 90}
