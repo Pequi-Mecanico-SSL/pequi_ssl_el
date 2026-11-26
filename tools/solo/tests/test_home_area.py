@@ -21,7 +21,7 @@ def make(steps, script=(), robot=(-1.0, 0.0, 0.0), ball=(-1.2, 0.8), timeline=()
     return s, run, note, world, strat, clk
 
 def alerts(note):
-    return [m for m in note.sent if not m.startswith("session ended")]
+    return [m for m in note.sent if not m.startswith(("session ended", "session starting"))]
 
 
 def test_geometry_and_params():

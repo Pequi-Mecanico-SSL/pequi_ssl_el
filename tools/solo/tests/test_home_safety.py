@@ -35,9 +35,10 @@ def make_cams(steps, frames, cameras=(0,), robot=(-1.0, 0.0, 0.0), budget=300.0,
 
 
 # ---- 1. a robot with our colour and our id
+VF = A.VISION_FRESH
 OURS, TWIN = ("blue", 3, -1.0, 0.0), ("blue", 3, -0.6, 0.4)      # the twin: another team's robot, our colour and id
 
-def test_a_second_robot_with_our_colour_and_id_is_another_robot():
+def test_a_second_robot_with_our_colour_and_id_stops_the_step_and_is_named_as_two_robots_seen_as_ours():
     t_in = [1e18]
     cases = {"same camera, ours first": lambda t: {0: [OURS] + ([TWIN] if t >= t_in[0] else []), 1: []},
              "same camera, ours last": lambda t: {0: ([TWIN] if t >= t_in[0] else []) + [OURS], 1: []},
@@ -46,9 +47,11 @@ def test_a_second_robot_with_our_colour_and_id_is_another_robot():
     for name, frames in cases.items():
         s, run, note, world, clk = make_cams([SPIN(label="spin")], frames, cameras=(0, 1), budget=60, switch_after=0)
         t_in[0] = clk.t + 2.0; s.run()
-        assert run.stops and run.stops[0][1] == "another robot: blue3 at (-0.60, +0.40)", name
+        two = "two robots are seen as blue 3: at (-1.00, +0.00) and (-0.60, +0.40), the tools cannot tell which is ours"
+        assert run.stops and run.stops[0][1] == "no information: " + two, name
         assert run.stops[0][0] - t_in[0] <= 0.1 + 1e-6 and not s.not_ours, name
-        assert alerts(note)[0].startswith("another robot (blue 3) entered our half at (-0.60, +0.40)"), name
+        assert alerts(note)[0] == two + "; the session holds" and len(run.cmds("characterize.py")) == 1, name
+        assert not any("another robot (blue 3)" in m for m in alerts(note)), name
 
 def test_our_robot_seen_by_two_overlapping_cameras_is_one_robot():
     frames = lambda t: {0: [OURS], 1: [("blue", 3, -1.05, 0.03)]}
@@ -60,9 +63,65 @@ def test_two_robots_with_our_colour_and_id_near_the_tools_robot_is_no_informatio
     frames = lambda t: {0: [("blue", 3, -1.0, 0.2), ("blue", 3, -1.0, -0.2)]}
     s, run, note, world, clk = make_cams([SPIN(label="spin")], frames, budget=60)
     q = s.snap()
-    assert q["raw_us"] is None and s.no_info(q).startswith("which robot is ours cannot be told: 2 robots seen as blue 3")
-    s.run()                                                # no motion; the hold alerts after info_alert s
-    assert run.calls == [] and any(m.startswith("which robot is ours cannot be told") for m in alerts(note))
+    assert q["raw_us"] is None and s.no_info(q) == "two robots are seen as blue 3: at (-1.00, -0.20) and (-1.00, +0.20), the tools cannot tell which is ours"
+    s.run()                                                # no motion; the hold alerts at once
+    assert run.calls == [] and alerts(note)[0].startswith("two robots are seen as blue 3")
+
+def timed(s, clk):
+    """[(t from now, log kind, message)] of the session's alert records, filled while it runs"""
+    t0 = clk.t; rec = []; log = s.log
+    def rlog(kind, **kw):
+        if kind in ("alert", "alert_held"): rec.append((round(clk.t - t0, 1), kind, kw.get("message", "")))
+        return log(kind, **kw)
+    s.log = rlog
+    return rec
+
+def test_a_twin_touching_ours_in_one_frame_stops_the_step_and_holds_while_it_stays():
+    t = {}
+    def frames(now):
+        dt = now - t["0"]
+        if dt < 2: return {0: [OURS], 1: []}
+        if dt < 4: return {0: [OURS], 1: [("blue", 3, -1.0, 0.8)]}            # approaching on camera 1
+        if dt < 40: return {0: [OURS, ("blue", 3, -1.0, 0.22)], 1: []}        # touching ours, the same frame of camera 0
+        return {0: [OURS], 1: []}
+    s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")], frames, cameras=(0, 1), budget=120, switch_after=0)
+    t["0"] = clk.t; starts = []; go = run.run
+    run.run = lambda *a, **k: (starts.append(clk.t - t["0"]), go(*a, **k))[1]
+    s.run()
+    assert run.stops[0][0] - t["0"] <= 2.1 + 1e-6 and run.stops[0][1].startswith("no information: two robots are seen as blue 3")
+    assert len(starts) == 3 and starts[1] >= 40 + 5 - 0.3            # nothing ran while the twin stayed
+    assert s.done == [1, 2] and alerts(note)[0].startswith("two robots are seen as blue 3")
+    rv = A.RawVision(Cams(clk, lambda now: {0: [OURS, ("blue", 3, -1.0, 0.22)]}), clk, thread=False, cameras=[0])
+    clk.sleep(1 / 60); assert len(rv.snapshot()["vision_dets"]) == 2      # one frame: never merged
+
+def test_one_robot_seen_by_two_cameras_with_different_frame_ages_at_speed_stays_one_robot():
+    clk = A.SimClock(); t0 = clk.t; v = 1.5
+    pos = lambda now: (-2.0 + v * (now - t0), 0.3)
+    tick = [0]
+    def frames(now):                                   # camera 0 every frame; camera 1 every 6th (frames up to 0.08 s old), 3 cm off
+        tick[0] += 1; x, y = pos(now); f = {0: [("blue", 3, x, y)]}
+        if tick[0] % 6 == 0: f[1] = [("blue", 3, x + 0.03, y - 0.02)] if now - t0 < 1.5 else []   # then it leaves camera 1's view
+        return f
+    rv = A.RawVision(Cams(clk, frames), clk, thread=False, cameras=[0, 1])
+    counts = []
+    while clk.t - t0 < 2.0:
+        clk.sleep(1 / 60); counts.append(len([d for d in rv.snapshot()["vision_dets"] if d[:2] == ("blue", 3)]))
+    assert set(counts) == {1}
+    twins = A.RawVision(Cams(clk, lambda now: {0: [OURS], 1: [("blue", 3, -1.0, 0.2)]}), clk, thread=False, cameras=[0, 1])
+    clk.sleep(1 / 60)
+    assert len(twins.snapshot()["vision_dets"]) == 2                  # two cameras, 0.20 m apart, fresh: two robots
+
+def test_two_robots_seen_as_ours_far_apart_hold_the_session_and_say_so():
+    jump = [1e18]
+    def frames(now):
+        if now >= jump[0]: world.set(robot=(1.5, 0.5, 0.0))           # the connector follows the other one
+        return {0: [OURS], 1: [("blue", 3, 1.5, 0.5)] if now >= jump[0] - 5 else []}
+    s, run, note, world, clk = make_cams([SPIN(label="a")], frames, cameras=(0, 1), budget=60, switch_after=0)
+    jump[0] = clk.t + 7.0; s.run()
+    two = "two robots are seen as blue 3: at (-1.00, +0.00) and (+1.50, +0.50), the tools cannot tell which is ours"
+    assert run.stops[0][1] == "no information: " + two and len(run.cmds("characterize.py")) == 1
+    assert alerts(note)[0] == two + "; the session holds" and not any("another robot (blue 3)" in m for m in alerts(note))
+    assert not s.not_ours and s.done == []
 
 
 # ---- 3. a camera that never sends
@@ -87,6 +146,40 @@ def test_a_home_session_without_the_camera_list_or_the_alert_command_does_not_st
     s, run, note, *_ = make([SPIN()]); s.notifier = A.Notifier(cmd="", notice_cmd="")
     s.run()
     assert run.calls == [] and "SOLO_NOTIFY_CMD" in s.stop_why
+
+def test_a_home_session_starts_only_when_the_session_starting_alert_is_delivered(tmp_path):
+    out = tmp_path / "sent"
+    for rc in (3, 0):
+        cmd = tmp_path / f"notify{rc}.sh"; cmd.write_text(f'#!/bin/sh\nprintf "%s\\n" "$1" >> {out}\nexit {rc}\n'); cmd.chmod(0o755)
+        out.write_text("")
+        s, run, note, *_ = make([SPIN()], head=dict(name="left_noball"), budget=60); s.notifier = A.Notifier(cmd=str(cmd), notice_cmd="")
+        s.run()
+        lines = out.read_text().splitlines()
+        assert lines[0] == "session starting: left_noball, the -x half, budget 1 min"
+        if rc: assert run.calls == [] and "did not deliver the start alert (failed: rc 3; rc 3)" in s.stop_why and lines[-1].startswith("session not started")
+        else: assert len(run.calls) == 1 and s.done == [1]
+
+def test_a_dry_run_names_the_start_alert_and_sends_nothing():
+    import io
+    s, run, note, *_ = make([SPIN()], head=dict(name="left_noball"), budget=600)
+    buf = io.StringIO(); A.dry_run(s, out=buf, tables=False)
+    assert "would send the alert 'session starting: left_noball, the -x half, budget 10 min'" in buf.getvalue() and note.sent == []
+
+def test_a_camera_not_on_the_list_is_watched_from_its_first_frame():
+    late = [1e18, 1e18]                                 # camera 2, not listed, sends from late[0] to late[1]
+    s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")],
+                                         lambda t: {0: [OURS], **({2: []} if late[0] <= t < late[1] else {})}, cameras=(0,), budget=60, switch_after=0)
+    rec = []; log = s.log; s.log = lambda kind, **kw: (rec.append((kind, kw)), log(kind, **kw))[1]
+    late[0] = clk.t + 2.0; late[1] = clk.t + 7.0; s.run()
+    assert [kw["camera"] for k, kw in rec if k == "camera_unlisted"] == [2] and s.cameras == [0, 2]
+    assert run.stops and run.stops[0][1].startswith("no information: no vision for") and "(camera 2" in run.stops[0][1]
+    assert run.stops[0][0] - late[1] <= VF + 0.15
+
+def test_frames_from_a_camera_not_on_the_list_at_the_start_refuse_the_start():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS], 3: []}, cameras=(0,), budget=60)
+    s.run()
+    assert run.calls == [] and "frames from camera(s) 3 that are not on the camera list (0)" in s.stop_why
+    assert note.sent[0].startswith("session not started: frames from camera(s) 3")
 
 
 # ---- 2. robots between the home area and the walls
@@ -247,16 +340,22 @@ def test_a_stopped_step_leaves_no_member_of_its_group(tmp_path):
 
 
 # ---- the alert cap and the alert command
-def test_alerts_of_one_kind_are_capped_and_counted():
+def test_alerts_are_capped_by_kind_and_robot_and_counted():
     s, run, note, world, strat, clk = make([])
-    for k in range(3): s.alert(f"another robot (yellow {k}) entered our half at (-0.6{k}, +0.30); our robot waits at (-1.00, +0.00)"); clk.sleep(10)
-    s.alert("no vision for 1.0 s (camera 0): the session holds")
-    assert len(note.sent) == 2
-    clk.sleep(40); s.alert("another robot (blue 5) entered our half at (-1.60, -1.00); our robot waits at (-1.00, +0.00)")
-    assert len(note.sent) == 3 and note.sent[-1].endswith("(2 similar alerts held back since the last one)")
-    s.alert("another robot (blue 5) entered our half at (-1.60, -1.00); our robot waits at (-1.00, +0.00)")
-    s.alert("session ended: budget used (0 steps done, 0 skipped, 0 not run)", urgent=True)
-    assert len(note.sent) == 4 and note.sent[-1].startswith("session ended")
+    msg = lambda n: f"another robot ({s.who(n)}) entered our half at (-0.60, +0.30); our robot waits at (-1.00, +0.00)"
+    sent = []
+    for k in range(3): sent.append(s.alert(msg("yellow2"), kind="intruder", robot="yellow2")); clk.sleep(10)   # one robot crossing three times
+    assert sent == [True, False, False] and len(note.sent) == 1
+    assert s.alert(msg("blue5"), kind="intruder", robot="blue5") and len(note.sent) == 2          # another robot: at once
+    assert s.alert("no vision for 1.0 s (camera 0): the session holds", kind="no_info") and len(note.sent) == 3
+    clk.sleep(40); assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2")              # the gap has passed
+    assert note.sent[-1].endswith("(2 similar alerts held back since the last one)")
+    t = clk.t; assert not s.alert(msg("yellow2"), kind="intruder", robot="yellow2", since=t)     # held while its cause is new ...
+    clk.sleep(s.ALERT_DUE); assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2", since=t)   # ... sent once it lasted
+    assert not note.sent[-1].endswith("held back since the last one)")                          # the one held was this one
+    assert not s.alert(msg("yellow2"), kind="intruder", robot="yellow2")                        # held, and never sent:
+    s.finish([], [])                                                                            # the session's end counts it
+    assert note.sent[-1].startswith("session ended") and note.sent[-1].endswith("alerts held back and never sent: 1 intruder (yellow 2)")
 
 def test_an_intruder_crossing_in_and_out_sends_one_alert_a_minute():
     tl = []
@@ -265,6 +364,64 @@ def test_an_intruder_crossing_in_and_out_sends_one_alert_a_minute():
     s.run()
     a = [m for m in alerts(note) if "entered our half" in m]
     assert 2 <= len(a) <= 3 and len(s.intrusions) >= 6 and "held back" in a[-1]
+
+def test_a_camera_silent_again_for_good_is_alerted_again_after_info_alert():
+    t = {}
+    def frames(now):                                    # camera 1 silent 12 s, back, then silent for good from 25 s
+        dt = now - t["0"]
+        return {0: [OURS]} if 2 <= dt < 14 or dt >= 25 else {0: [OURS], 1: []}
+    s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(6)], frames, cameras=(0, 1), budget=600, switch_after=0)
+    t["0"] = clk.t; rec = timed(s, clk); s.run()
+    nv = [(dt, m) for dt, k, m in rec if k == "alert" and m.startswith("no vision for")]
+    assert len(nv) >= 2 and nv[0][0] <= 2.6 + 10 + 0.5 and 25.5 + 10 - 0.5 <= nv[1][0] <= 25.5 + 10 + 0.5
+    assert "(camera 1)" in nv[1][1] and "held back" not in nv[1][1]
+
+def test_another_robot_entering_after_one_that_crossed_is_alerted_at_once():
+    tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (30.0, dict(others=[("blue5", -1.8, -1.0)]))]
+    s, run, note, world, strat, clk = make([SPIN(label=f"s{k}") for k in range(6)], timeline=tl, budget=300, switch_after=0)
+    rec = timed(s, clk); s.run()
+    b5 = [(dt, m) for dt, k, m in rec if k == "alert" and "(blue 5)" in m]
+    assert b5[0][0] <= 30.0 + 0.3 and b5[0][1].startswith("another robot (blue 5) entered our half at (-1.80, -1.00)")
+
+def test_the_same_robot_back_and_staying_is_alerted_once_it_has_stayed_a_few_seconds():
+    tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (20.0, dict(others=[("yellow2", -1.8, 1.0)]))]
+    s, run, note, world, strat, clk = make([SPIN(label=f"s{k}") for k in range(3)], timeline=tl, budget=100, switch_after=0)
+    rec = timed(s, clk); s.run()
+    y2 = [dt for dt, k, m in rec if k == "alert" and "(yellow 2) entered" in m]
+    assert len(y2) == 2 and 20.0 + s.ALERT_DUE - 0.3 <= y2[1] <= 20.0 + s.ALERT_DUE + 0.5
+
+def test_a_hold_under_information_that_comes_and_goes_alerts_and_reminds():
+    t = {}
+    def frames(now):                                    # from 2 s our robot unseen 0.8 s out of every 2 s
+        dt = now - t["0"]
+        return {0: []} if dt > 2 and (dt % 2.0) < 0.8 else {0: [OURS]}
+    s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(3)], frames, budget=600, switch_after=0)
+    t["0"] = clk.t; rec = timed(s, clk); s.run()
+    a = [(dt, m) for dt, k, m in rec if k == "alert" and not m.startswith(("session starting", "session ended"))]
+    assert run.stops and a and a[0][0] <= run.stops[0][0] - t["0"] + 10 + 0.5
+    assert a[0][1].startswith("the session has held for 10 s without 5 s known and clear") and "our robot (blue 3) not seen" in a[0][1]
+    assert len(a) == 3 and "reminder 2/3" in a[1][1] and 120 - 0.5 <= a[1][0] - a[0][0] <= 120 + 0.5
+
+def test_a_robot_entering_after_a_no_information_stop_is_alerted_at_once():
+    t = {}
+    def frames(now):                                    # a 1 s gap stops the step; then a robot inside our half, staying
+        dt = now - t["0"]
+        return {} if 2 <= dt < 3 else {0: [OURS, ("yellow", 1, -1.8, 1.0)]} if dt >= 3 else {0: [OURS]}
+    s, run, note, world, clk = make_cams([SPIN(label="a")], frames, budget=300, switch_after=0)
+    t["0"] = clk.t; rec = timed(s, clk); s.run()
+    assert run.stops[0][1].startswith("no information: no vision for")
+    first = [(dt, m) for dt, k, m in rec if k == "alert" and "(yellow 1)" in m][0]
+    assert first[0] <= 3.0 + 0.5 and first[1].startswith("another robot (yellow 1) entered our half at (-1.80, +1.00); our robot stopped")
+
+def test_home_auto_without_a_chosen_half_alerts_with_the_reason():
+    cases = {"two robots are seen as blue 3": lambda t: {0: [("blue", 3, -1.0, 0.2), ("blue", 3, -1.0, -0.2)]},
+             "our robot (blue 3) not seen in the vision": lambda t: {0: []}}
+    for why, frames in cases.items():
+        s, run, note, world, clk = make_cams([SPIN(label="a")], frames, budget=300, home_auto=True)
+        rec = timed(s, clk); s.run()
+        a = [(dt, m) for dt, k, m in rec if k == "alert" and "no half chosen" in m]
+        assert run.calls == [] and a and a[0][1].startswith(why), why
+        assert a[0][0] <= s.robot_wait + s.clear_s + s.info_alert + 0.5 and len(a) == 3 and "reminder 2/3" in a[1][1], why
 
 def test_a_failing_alert_command_is_tried_twice_and_logged(tmp_path):
     cmd = tmp_path / "notify.sh"; cnt = tmp_path / "n"
