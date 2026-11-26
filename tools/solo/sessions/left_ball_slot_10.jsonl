@@ -6,7 +6,7 @@
 # corridor; a ball in a goal or against a wall is a job for a person (one alert).
 # The strategy node must have been started with run_real.sh and switched off (its saved line is restarted with the
 # side and parameters of each strategy step). Home area and parking spot in the header.
-# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10 --our-id N --cameras C
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10 --our-id N --camera-ids 0,1,...  (every camera of the field; SOLO_NOTIFY_CMD set: the start alert must go out)
 {"kind": "session", "name": "left_ball_slot_10", "budget_min": 10, "home": "-2.2,-0.10,-1.45,1.45", "park": [-0.85, 0.0], "vars": {"OUT": "${SOLO_DATA}/sessions"}, "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
 {"kind": "marker", "label": "start marker", "text": "left-half ball slot: start (auto_session)", "data": "use"}
 {"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}
