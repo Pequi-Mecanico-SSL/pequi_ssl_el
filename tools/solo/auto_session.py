@@ -2316,7 +2316,9 @@ class Session:
     def env_for(self, st, retry=False):
         """the child's environment: this process's, the header's env, the step's env (a value None removes the
         variable). characterize.py reads SOLO_BRAKE as a number: for a test step SOLO_BRAKE=auto is resolved the way
-        series.py does before any braking is measured (SOLO_BRAKE_FIRST, default 0.8)"""
+        series.py does before any braking is measured (SOLO_BRAKE_FIRST, default 0.8). A series step gets SOLO_GOTO_BOX,
+        the area its robot may cross on the way to each test's start: the home area (the current one after a switch
+        of halves), without a home area the header's SOLO_BOX; a step's own SOLO_GOTO_BOX is kept"""
         env = dict(os.environ)
         for src in (self.head.get("env", {}), st.get("env", {})):
             for k, v in expand(src, self.vs).items():
@@ -2324,6 +2326,9 @@ class Session:
                 else: env[k] = str(v)
         if st.get("kind") == "test" and env.get("SOLO_BRAKE") == "auto":
             env["SOLO_BRAKE"] = str(float(env.get("SOLO_BRAKE_FIRST") or "0.8"))
+        if st.get("kind") == "series" and not env.get("SOLO_GOTO_BOX"):     # the way to each test's start (series.py)
+            area = ",".join(f"{v:g}" for v in self.home) if self.home is not None else str(expand(self.head.get("env", {}), self.vs).get("SOLO_BOX") or "")
+            if area: env["SOLO_GOTO_BOX"] = area
         if retry:
             env["SOLO_BOX"] = widen(env.get("SOLO_BOX", ""))
             if self.home is not None and st.get("label") != "fetch the ball": env["SOLO_BOX"] = clip_rects(env["SOLO_BOX"], robot_area(self.home))

@@ -467,3 +467,18 @@ def test_a_failing_watch_stops_the_step():
     r = A.Runner(echo=False)
     import inspect
     assert "fail safe: stop" in inspect.getsource(A.Runner.run)
+
+
+def test_a_series_step_gets_the_home_area_for_the_way_to_each_tests_start():
+    os.environ.pop("SOLO_GOTO_BOX", None)
+    s, *_ = make([SPIN()], head={"kind": "session", "env": {"SOLO_BOX": HOME}})
+    st = dict(kind="series", plan="p.jsonl", env={"SOLO_BOX": ""})
+    assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.2,-0.1,-1.45,1.45" and s.env_for(st)["SOLO_BOX"] == ""
+    assert s.env_for(dict(st, env={"SOLO_GOTO_BOX": "-2,-1,-1,1"}))["SOLO_GOTO_BOX"] == "-2,-1,-1,1"     # the step's own is kept
+    assert "SOLO_GOTO_BOX" not in s.env_for(SPIN())                                                    # series steps only
+    s.home = A.mirror_rect(s.home)                                                                     # after a switch of halves
+    assert s.env_for(st)["SOLO_GOTO_BOX"] == "0.1,2.2,-1.45,1.45"
+    s, *_ = make([SPIN()], head={"kind": "session", "env": {"SOLO_BOX": "-2.05,2.05,-1.3,1.3"}}, home=None)
+    assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.05,2.05,-1.3,1.3"                                     # no home area: the header's box
+    s, *_ = make([SPIN()], home=None)
+    assert "SOLO_GOTO_BOX" not in s.env_for(st)

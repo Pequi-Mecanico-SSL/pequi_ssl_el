@@ -15,6 +15,12 @@ Every result line of characterize.py is appended to --results with the label and
 stops at the first test that aborts.
 More plan fields:
     "box", "brake_box", "settle"   per-test SOLO_BOX / SOLO_BRAKE_BOX / SOLO_SETTLE for characterize.py
+SOLO_GOTO_BOX (optional): the area the robot may cross on its way to a test's start ("at", a ram's run-up point). A
+test's own box is often small and the robot comes from the test before it; without SOLO_GOTO_BOX the way there is
+confined to the test's box, and a robot that starts outside it stops at once ("at the edge of the allowed area").
+With SOLO_GOTO_BOX the robot is also driven to the start of every step and sweep before the test (they drive there
+themselves, but inside their own box), and before the first test of a run to the middle of its box when it has no
+start of its own (a goto, a spin without "at").
     "speeds": [1.0, 1.4, ...]      escalate a step (args[1]) or a spin (args[0]): each value in turn; it stops once the
                                    peak speed (spin: steady rate) rises by less than 4 % over the best before it
     "back": [x, y, dir_deg]        with "speeds": every second run starts here instead (back and forth along a line)
@@ -107,6 +113,23 @@ def run(*a, env=None):
     line = [l for l in text.splitlines() if l.startswith("{") or l.startswith("ABORT") or "not in vision" in l or "no ball" in l]
     return line[-1] if line else ((text.strip().splitlines() or ["no output"])[-1])
 
+def goto_env(env):
+    """the environment of the drive to a test's start: SOLO_GOTO_BOX as its allowed area when set, else the test's"""
+    area = os.environ.get("SOLO_GOTO_BOX", "")
+    return dict(env, SOLO_BOX=area) if area else env
+
+def start_of(e, first):
+    """[x, y, heading deg] to drive to before a test when SOLO_GOTO_BOX is set, or None: the start a step or a sweep
+    drives to itself (it does that inside its own box, which the robot may be outside of after another test); for
+    the first test of a run without a start of its own (a goto, a spin without "at"), the middle of its box"""
+    a = e.get("args", [])
+    if not os.environ.get("SOLO_GOTO_BOX") or "at" in e or e["test"] == "ram": return None
+    if e["test"] == "step" and len(a) >= 6: return [float(a[2]), float(a[3]), float(a[4]) - (0.0 if a[0] == "fwd" else 90.0)]
+    if e["test"] == "sweep" and len(a) >= 4: return [float(a[0]), float(a[2]), 0.0]
+    if first and e.get("box"):
+        r = box_of(e)[0]; return [round((r[0] + r[1]) / 2, 3), round((r[2] + r[3]) / 2, 3), 0.0]
+    return None
+
 def env_for(e):
     env = dict(os.environ)
     for k, name in (("box", "SOLO_BOX"), ("brake_box", "SOLO_BRAKE_BOX"), ("settle", "SOLO_SETTLE")):
@@ -136,7 +159,7 @@ def main():
       if test == "ram":
           sx, sy = e["spot"]; dirn = float(a[1]) if len(a) > 1 else 0.0; runup = float(a[2]) if len(a) > 2 else 0.75
           ux, uy = math.cos(math.radians(dirn)), math.sin(math.radians(dirn))
-          out = run("goto", round(sx - runup * ux, 3), round(sy - runup * uy, 3), dirn, env=env)
+          out = run("goto", round(sx - runup * ux, 3), round(sy - runup * uy, 3), dirn, env=goto_env(env))
           if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
           wiggle(); t_ask = time.time()
           print(f"    waiting for the ball at ({sx:+.2f}, {sy:+.2f}) ...", flush=True)
@@ -149,8 +172,9 @@ def main():
           while ball_in_area(e):
               if not told: print("    REMOVE THE BALL from the test area ...", flush=True); told = True
               rest(0.3)
-          if "at" in e:
-              out = run("goto", *e["at"], env=env)
+          at = e.get("at") or start_of(e, done == 1)
+          if at:
+              out = run("goto", *at, env=goto_env(env))
               if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
       listen(0.3)
       if "speeds" in e:                                   # escalation along a line, back and forth
