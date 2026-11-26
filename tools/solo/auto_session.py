@@ -116,8 +116,11 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   more, it is within --reappear m of the anchor (0.15 m when it stood) and no second copy was seen since the anchor.
   Anything else is "which robot is ours was lost: ..." (no information, alerted at once, "...: put the robot back at
   (x, y) or restart the session; the session will try to recognise it by a short turn on the spot", the last part
-  while probes are left); when that alert went out, its recovery is alerted too: "our robot recognised by its turn at
-  (x, y): the session resumes" or "our robot seen again at its place (x, y): the session resumes"; it clears when one robot of our colour and id has been seen within 0.15 m of that
+  while probes are left, in the hold that runs the probe, with the candidate (none in view: the anchor) where a probe
+  is accepted; a new loss is alerted whatever the backoff); when the lost message went out in any alert, its recovery
+  is alerted too: "our robot recognised by its turn at (x, y): the session resumes" or "our robot seen again at its
+  place (x, y): the session resumes" ("...; the session still holds: <cause>" while another cause keeps the hold);
+  a probe that fails leaves it lost at the same anchor; it clears when one robot of our colour and id has been seen within 0.15 m of that
   position for --clear s, or by the identity probe, never by time alone.
   IDENTITY PROBE: while which robot is ours is lost, the supervisor may prove whether the one robot of our colour and
   id in view (the candidate) is ours: when for --clear s the vision has been fresh, exactly one robot of our colour
@@ -1090,7 +1093,7 @@ class Session:
         self.cameras = None if cameras is None else sorted({int(c) for c in cameras})
         self.log_lock = threading.Lock(); self.alert_keys = {}; self.kinds_sent = set(); self.floor_buf = []; self.t_out = -1e18
         self.last_send = None; self.alert_dead = alert_dead; self.dead = None; self.sender_restarts = 0
-        self.us_last = None; self.ours_lost = None; self.twins_seen = False     # telling our robot apart (snap)
+        self.us_last = None; self.ours_lost = None; self.twins_seen = False; self.found_due = None    # telling our robot apart (snap)
         self.moving = False; self.moves = []; self.settle = settle; self.max_speed = max_speed   # motion intervals [start, end]
         self.holding = None                                                     # the current hold: since, cause
         self.reappear, self.clear_own = reappear, clear_own
@@ -1144,6 +1147,7 @@ class Session:
             st["occ"] = since; st["between"] += 1
             self.log("alert_held", of=kind, robot=robot, held=st["between"], next_in=round(st["t"] + self.ALERT_BACKOFF[min(st["n"], len(self.ALERT_BACKOFF)) - 1] - now, 1))
         return False
+    LOST = "which robot is ours was lost"
     ALERT_LASTING = 20.0                # s: a cause that has lasted this long goes out whatever its backoff (force)
     def alert(self, msg, *, kind, robot=None, since=None, title="field session", urgent=False, force=False):
         """an alert -> True when it was accepted (queued for the sender, or merged into the next one sent), False when
@@ -1153,8 +1157,12 @@ class Session:
         sent, an alert of a kind already sent this session (except ALERT_NOW) waits and is merged into the next one
         sent (at the latest when the floor has passed). The caller repeats an alert held by the backoff while its cause
         lasts. force: the backoff is skipped (a cause that has lasted ALERT_LASTING s; the rate floor still applies).
-        urgent (the start, the end, not ours, a node that does not stop): always sent at once"""
+        urgent (the start, the end, not ours, a node that does not stop): always sent at once. While which robot is
+        ours is lost: an ours_lost alert of a loss not yet alerted skips the backoff (a new loss goes out at once), and
+        any alert accepted with the lost message in its text marks the loss alerted (its recovery is alerted too)"""
         now = self.clock(); robots = robot if isinstance(robot, list) else [robot]
+        L = self.ours_lost; lost = L is not None and (kind == "ours_lost" or self.LOST in msg)
+        if kind == "ours_lost" and L is not None and not L.get("alerted"): force = True
         if not urgent:
             if not force and not all([self.alert_due(kind, r, since) for r in robots]): return False
             between, t_prev = 0, None
@@ -1170,9 +1178,10 @@ class Session:
             if not first and kind not in self.ALERT_NOW and now - self.t_out < self.ALERT_FLOOR:
                 self.floor_buf.append(msg); self.kinds_sent.add(kind)
                 self.log("alert_merged", message=msg, of=kind, robot=robot, note=f"sent with the next alert (at most one every {self.ALERT_FLOOR:.0f} s)")
+                if lost: L["alerted"] = True
                 return True
         self.kinds_sent.add(kind); self.dispatch(msg, title, kind, robot)
-        if kind == "ours_lost" and self.ours_lost is not None: self.ours_lost["alerted"] = True   # its recovery is alerted too
+        if lost: L["alerted"] = True
         return True
     def dispatch(self, msg, title="field session", kind=None, robot=None):
         """queue one alert for the sender, the alerts the rate floor held merged into it"""
@@ -1280,6 +1289,7 @@ class Session:
             s["mine"] = [(d[2], d[3], d[4]) for d in mine]
             single = s.get("vision_unconfirmed") or []             # another robot counts once confirmed (RawVision)
             s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us and ((d[0], int(d[1])) == me or d not in single))]
+            if self.found_due: L, msg = self.found_due; self.found_due = None; self.found_text(L, msg, s)
         return s
     ID_TIGHT = 0.15                     # m: how far our robot may seem to move while it stands (detection noise)
     def motion(self, on):
@@ -1332,12 +1342,12 @@ class Session:
         L = self.ours_lost
         if L is not None:
             back = len(mine) == 1 and math.hypot(mine[0][2] - L["x"], mine[0][3] - L["y"]) <= self.ID_TIGHT
-            if not back: L["t_ok"] = None; return None, f"which robot is ours was lost: {L['why']}"
+            if not back: L["t_ok"] = None; return None, f"{self.LOST}: {L['why']}"
             L["t_ok"] = now if L["t_ok"] is None else L["t_ok"]
-            if now - L["t_ok"] < self.clear_s: return None, f"which robot is ours was lost: {L['why']}"
+            if now - L["t_ok"] < self.clear_s: return None, f"{self.LOST}: {L['why']}"
             self.log("ours_found", at=[round(mine[0][2], 3), round(mine[0][3], 3)], lost_for=round(now - L["since"], 1))
             self.ours_lost = None; us = mine[0] if us is None or us is mine[0] else us
-            self.found_text(L, f"our robot seen again at its place ({mine[0][2]:+.2f}, {mine[0][3]:+.2f}): the session resumes")
+            self.found_due = (L, f"our robot seen again at its place ({mine[0][2]:+.2f}, {mine[0][3]:+.2f})")   # sent by snap
         if us is not None and len(mine) == 1 and amb is None: self.keep_us(us, now, alone=True)
         elif len(mine) > 1 and self.us_last is not None:              # two copies: the one ours can have become
             p = self.us_last
@@ -1351,15 +1361,23 @@ class Session:
             self.us_last = dict(x=d[2], y=d[3], t=t_det)
             if alone: self.twins_seen = False
             self.moves = [m for m in self.moves if m[1] is None or m[1] + self.settle > t_det]
-    def lost_tail(self):
-        """what a person can do when which robot is ours was lost (and, while probes are left, that one may run)"""
+    def lost_tail(self, s=None, probe=False):
+        """what a person can do when which robot is ours was lost; and that a probe may run when probes are left, the
+        hold alerting is the one that runs it (probe) and the candidate in snapshot s (with none in view: the anchor)
+        stands where a probe is accepted (our half or within fetch_limit beyond its open edges)"""
         L = self.ours_lost
         if not L: return "restart the session"
-        more = "; the session will try to recognise it by a short turn on the spot" if self.probes and self.probes_run < self.probes else ""
+        mine = (s or {}).get("mine") or []; at = mine[0][:2] if len(mine) == 1 else (L["x"], L["y"])
+        can = probe and self.probes and self.probes_run < self.probes and in_rect(at, fetch_area(self.home, self.fetch_limit))
+        more = "; the session will try to recognise it by a short turn on the spot" if can else ""
         return f"put the robot back at ({L['x']:+.2f}, {L['y']:+.2f}) or restart the session{more}"
-    def found_text(self, L, msg):
-        """identity recovered after L (the lost record): an alert when the lost alert went out (a person may be on the
-        way to the robot and must know it moves again), else a quiet notice"""
+    def found_text(self, L, msg, s):
+        """identity recovered after L (the lost record): msg + ": the session resumes", or "; the session still holds:
+        <cause>" while another cause keeps the hold (no information, another robot in our half or near ours: snapshot
+        s); an alert when the lost alert went out (a person may be on the way to the robot and must know it moves
+        again), else a quiet notice"""
+        why = self.no_info(s) or (self.robots_text(self.intrusion(s)) if self.intrusion(s) else None)
+        msg += f"; the session still holds: {why}" if why else ": the session resumes"
         if L.get("alerted"): self.alert(msg, kind="ours_found", force=True)
         else: self.notice(msg)
     # ---- the identity probe: which robot is ours, proved by a commanded turn on the spot
@@ -1434,12 +1452,13 @@ class Session:
         candidate's heading changed in the commanded direction by PROBE_BAND x rate x time (from before the turn to
         PROBE_AFTER s after its child ended) and it moved less than PROBE_MOVE overall -> identity anchored on it, an
         alert when the lost alert went out (else a quiet notice). Fail (no turn seen, the wrong direction, moved):
-        identity stays lost, one alert, no new probe at that place for PROBE_BAD_S s. Stopped by no information or
+        identity stays lost (lost again, at the same anchor, when the tracking cleared it during the turns), one
+        alert, no new probe at that place for PROBE_BAD_S s. Stopped by no information or
         another robot, or a child that did not complete its turn (a non-zero exit, a result line marked interrupted or
         aborted, none at all): no verdict, no alert, the hold goes on (after a child's abort, the next probe not before
         PROBE_RETRY s); it still counts against `probes`.
         -> True on a pass"""
-        self.probes_run += 1; self.probe_cand = None
+        self.probes_run += 1; self.probe_cand = None; L0 = self.ours_lost
         signs = random.sample((1.0, -1.0), 2); x0, y0 = c[0], c[1]
         box = f"{x0 - 0.25:.2f},{x0 + 0.25:.2f},{y0 - 0.25:.2f},{y0 + 0.25:.2f}"
         self.log("probe_start", n=self.probes_run, at=[round(x0, 3), round(y0, 3)], signs=signs, rate=self.probe_rate, seconds=self.probe_time)
@@ -1478,9 +1497,11 @@ class Session:
             self.ours_lost = None; self.twins_seen = False; self.moves = [m for m in self.moves if m[1] is None]
             self.us_last = dict(x=cc[0], y=cc[1], t=self.clock() - (cc[3] if len(cc) > 3 else 0.0))
             self.log("ours_found", at=[round(cc[0], 3), round(cc[1], 3)], by="probe")
-            self.found_text(L, f"our robot recognised by its turn at ({cc[0]:+.2f}, {cc[1]:+.2f}): the session resumes")
+            self.found_text(L, f"our robot recognised by its turn at ({cc[0]:+.2f}, {cc[1]:+.2f})", self.snap())
             return True
         self.probe_bad.append((x0, y0, self.clock()))
+        if self.ours_lost is None and L0 is not None:      # cleared by the tracking during the turns: lost again
+            self.ours_lost = dict(L0, t_ok=None); self.log("ours_lost", why=L0["why"], after="a failed probe")
         msg = (f"the robot seen as {self.team} {self.our_id} at {at} did not follow a commanded turn: it is not ours, "
                f"or ours does not respond; the session holds")
         if self.probes_run >= self.probes: msg += f" (no identity probe left: {self.probes_run} used{self.no_verdict_text()})"; self.probes_out_sent = True
@@ -1537,7 +1558,7 @@ class Session:
     def mismatch(self, s):
         """the robot the tools drive (the page's, through the connector) is not ours (colour + id in the raw view).
         Ours kept older than MATCH_AGE (its camera no longer shows it) is not compared with the page's fresh position:
-        our robot not seen, no information"""
+        our robot not seen, no information. Positions that agree with y flipped name --vision-mirror"""
         if self.home is None or "vision_dets" not in s: return None
         r = s.get("robot") if s.get("robot") is not None and s.get("robot_age", 9) <= VISION_FRESH else None
         if r is None or s.get("vision_age", 9) > VISION_FRESH: return None
@@ -1546,7 +1567,9 @@ class Session:
         if o is not None and o[2] > MATCH_AGE: return None
         if o is not None:
             d = math.hypot(r[0] - o[0], r[1] - o[1])
-            if d > MATCH_D: return f"the tools' robot at ({r[0]:+.2f}, {r[1]:+.2f}) is {d:.2f} m from {self.team} {self.our_id} at ({o[0]:+.2f}, {o[1]:+.2f})"
+            if d > MATCH_D:
+                flip = " (the positions agree with y flipped: check --vision-mirror)" if math.hypot(r[0] - o[0], r[1] + o[1]) <= MATCH_D else ""
+                return f"the tools' robot at ({r[0]:+.2f}, {r[1]:+.2f}) is {d:.2f} m from {self.team} {self.our_id} at ({o[0]:+.2f}, {o[1]:+.2f}){flip}"
             return None
         for name, x, y in s.get("others") or ():
             if math.hypot(r[0] - x, r[1] - y) < 0.1:
@@ -1810,7 +1833,7 @@ class Session:
             if s.get("us_lost") and self.ours_lost is not None:
                 c = self.probe_ready(s, now)
                 if c is not None:
-                    if not self.probe(c) and self.probes_run >= self.probes: self.probes_left_alert()
+                    self.probe(c)
                     s = self.look(); now = self.clock(); ni = self.no_info(s); ww = [] if ni else self.intrusion(s)
             if own_only and ((ni and ni != self.unseen_text()) or ww or self.near_half(s)): own_only = False
             if inside_only: ww = [q for q in ww if q[3] == "inside"]
@@ -1823,7 +1846,7 @@ class Session:
                     h["ni_sent"].add(cause); sent(True, now)
                 elif s.get("us_lost") and not h["lost_sent"]:               # which robot is ours was lost: at once
                     since = self.ours_lost and self.ours_lost["since"]
-                    if sent(self.alert(f"{ni}{note}; the session holds: {self.lost_tail()}", kind="ours_lost", since=since, force=lasting(since)), now):
+                    if sent(self.alert(f"{ni}{note}; the session holds: {self.lost_tail(s, probe=True)}", kind="ours_lost", since=since, force=lasting(since)), now):
                         h["lost_sent"] = True; h["ni_sent"].add(cause)
                 elif s.get("twins") and not h["twins_sent"]:                # two robots as ours: at once
                     h["twins_t"] = h["twins_t"] or now

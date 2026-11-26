@@ -51,14 +51,14 @@ def test_the_step_stops_within_half_a_second_of_a_mismatch_while_the_alert_comma
 
 
 # ---- 2. a twin must not become ours when our robot's tag drops out
-def swap_session(back=None, back_at=(-1.0, 0.0), budget=120):
+def swap_session(back=None, back_at=(-1.0, 0.0), budget=120, others=()):
     """a twin (our colour and id) enters at 2 s; our robot's tag is not detected from 20 s; the connector then follows
-    the twin. back: from then the twin has left and one robot of our colour and id is seen at back_at"""
+    the twin. back: from then the twin has left and one robot of our colour and id is seen at back_at (with others)"""
     T = {}
     def frames(t):
         dt = t - T["0"]
         if back is not None and dt >= back:
-            world.set(robot=(back_at[0], back_at[1], 0.0)); return {0: [("blue", 3, back_at[0], back_at[1])]}
+            world.set(robot=(back_at[0], back_at[1], 0.0)); return {0: [("blue", 3, back_at[0], back_at[1]), *others]}
         rs = [] if dt >= 20 else [OURS]
         rs = rs + ([TWIN] if dt >= 2 else [])
         if dt >= 20: world.set(robot=(TWIN[2], TWIN[3], 0.0))
@@ -290,9 +290,8 @@ def test_which_robot_is_ours_lost_while_our_robot_waits_outside_is_alerted_at_on
     s.ensure_home_clear = lambda inside_only=False: True
     s.drive_home(s.look(), "return_home")
     lost = [(t, m) for t, m in rec if m.startswith("which robot is ours was lost")]
-    assert lost and 30 <= lost[0][0] <= 30.6 and lost[0][1].endswith(
-        "; our robot at (+0.50, +0.00), outside our half: the session waits; put the robot back at (+0.50, +0.00) or restart the session"
-        "; the session will try to recognise it by a short turn on the spot")
+    assert lost and 30 <= lost[0][0] <= 30.6 and lost[0][1].endswith(       # this wait runs no probe: none promised
+        "; our robot at (+0.50, +0.00), outside our half: the session waits; put the robot back at (+0.50, +0.00) or restart the session")
 
 def test_session_ended_says_it_ended_holding_since_when_for_what_and_where_our_robot_stands():
     s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OUT, ("yellow", 2, -1.8, 1.0)]}, robot=(0.5, 0.0, 0.0), budget=60, switch_after=0)

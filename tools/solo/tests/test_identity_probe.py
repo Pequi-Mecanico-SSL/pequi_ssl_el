@@ -1,7 +1,7 @@
 """Tests of tools/solo/auto_session.py: our robot's identity after its tag drops out (continuity, reappearance, lost),
 the identity probe (a commanded turn on the spot watched in the raw vision; a child that did not turn gives no
 verdict), the shorter clear time of a hold whose only cause was our robot not seen, the start check of the vision's
-mirror setting, and the end alert when the alert sender has stopped. Fakes for the field (no
+mirror setting, the end alert when the alert sender has stopped, and the lost alert and its recovery. Fakes for the field (no
 robot, ROS or network): the simulated robot turns when a spin child runs; a twin does not.
     uv run --with pytest pytest -q tools/solo/tests/test_identity_probe.py"""
 import math, os, sys
@@ -301,3 +301,98 @@ def test_the_session_ended_alert_is_sent_directly_when_the_sender_thread_has_end
     assert any(m.startswith("session ended") for m in note.sent)
     d = [k for kind, k in rec if kind == "alert_sent_directly"]
     assert len(d) == 1 and d[0]["sent"] == "ok" and d[0]["message"].startswith("session ended")
+
+
+# ---- 7. the lost alert and its recovery
+LOST = A.Session.LOST
+
+def lost_record(s, x=-1.0, y=0.0, why="w"):
+    s.ours_lost = dict(since=s.clock(), x=x, y=y, t_ok=None, why=why); return s.ours_lost
+
+def test_a_lost_message_sent_in_any_alert_makes_the_recovery_an_alert_and_none_saying_it_holds_follows_it():
+    D = {"gotos": 0}                    # a goto at 1 m/s: ours unseen from 1 to 2 s; again for 11 s from 0.8 s into the second goto
+    def dropped(dt):
+        return 1.0 <= dt < 2.0 or ("d2" in D and D["d2"] <= dt < D["d2"] + 11.0)
+    def frames(t):
+        return {0: [] if dropped(t - D["t0"]) else [("blue", 3, *world.robot[:3])]}
+    s, run, note, world, clk = make_cams([dict(kind="goto", x=GOAL[0], y=GOAL[1], label="g"), SPIN(label="after")], frames,
+                                         robot=(*START, 0.0), budget=300, switch_after=0)
+    run.SPEED, run.REACT, run.DECEL = 1.0, 0.15, 3.0
+    snap0 = world.snapshot; F = {}
+    def snap():                         # the connector keeps the last position while ours is unseen
+        d = snap0()
+        if dropped(clk.t - D["t0"]):
+            F.setdefault("p", (d["robot"], clk.t)); d["robot"] = F["p"][0]; d["robot_age"] = round(clk.t - F["p"][1], 2)
+        else: F.clear()
+        return d
+    world.snapshot = snap
+    def on_run(argv):
+        if "goto.py" in " ".join(argv):
+            D["gotos"] += 1
+            if D["gotos"] == 2: D["d2"] = clk.t - D["t0"] + 0.8
+    timed_calls(run, clk, on_run); D["t0"] = clk.t
+    s.run()
+    sent = alerts(note); found = [j for j, m in enumerate(sent) if m.startswith("our robot recognised by its turn")]
+    assert s.ours_lost is None and s.done == [1, 2] and len(found) == 2 and not note.quiet
+    assert all(any(j >= i for j in found) for i, m in enumerate(sent) if LOST in m)     # every lost message has its recovery after it
+    assert all(m.endswith(": the session resumes") for m in (sent[j] for j in found))
+    # the lost message leaving in an alert of another kind, held by the rate floor: the recovery carries it
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=60)
+    assert s.preflight() is None
+    s.alert("no vision for 3.0 s: the session holds", kind="no_info", robot="a"); s.alert_poll()
+    L = lost_record(s)
+    assert s.alert(f"{LOST}: w: the session holds", kind="no_info", robot="b") and L["alerted"] and s.floor_buf
+    s.ours_lost = None; s.found_text(L, "our robot seen again at its place (-1.00, +0.00)", s.snap()); s.alert_poll()
+    assert alerts(note)[-1] == f"our robot seen again at its place (-1.00, +0.00): the session resumes | earlier: {LOST}: w: the session holds"
+    assert not s.floor_buf and not note.quiet
+
+def test_the_recovery_alert_says_the_session_still_holds_while_another_robot_is_in_our_half():
+    from test_alerts_identity import swap_session
+    s, run, note, starts = swap_session(back=60, others=[("yellow", 1, -1.5, 0.5)])
+    sent = alerts(note)
+    assert "our robot seen again at its place (-1.00, +0.00); the session still holds: another robot (yellow 1) entered our half at (-1.50, +0.50)" in sent
+    assert s.ours_lost is None and s.done == [] and not any(m.endswith("the session resumes") for m in sent)
+
+def test_the_lost_alert_promises_a_probe_only_when_one_can_run():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=60)
+    lost_record(s); q = s.snap()
+    back = "put the robot back at (-1.00, +0.00) or restart the session"; probe = "; the session will try to recognise it by a short turn on the spot"
+    assert s.lost_tail(q, probe=True) == back + probe
+    assert s.lost_tail(q) == back                                         # a hold that does not run the probe
+    lost_record(s, x=2.0); none = dict(q, mine=[])
+    assert s.lost_tail(none, probe=True) == "put the robot back at (+2.00, +0.00) or restart the session"   # the anchor beyond the probe's area
+    assert s.lost_tail(dict(q, mine=[(-1.0, 0.0, 0.0)]), probe=True).endswith(probe)                     # the candidate inside it
+    lost_record(s); s.probes_run = s.probes
+    assert s.lost_tail(q, probe=True) == back                             # no probe left
+
+def test_a_new_loss_within_the_backoff_of_the_last_is_alerted_at_once_and_a_repeat_of_it_is_not():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=60)
+    assert s.preflight() is None
+    L = lost_record(s, why="first")
+    assert s.alert(f"{LOST}: first; the session holds", kind="ours_lost", since=L["since"])
+    s.ours_lost = None; clk.t += 10.0
+    L = lost_record(s, why="second")
+    assert s.alert(f"{LOST}: second; the session holds", kind="ours_lost", since=L["since"])
+    clk.t += 5.0
+    assert not s.alert(f"{LOST}: second; the session holds", kind="ours_lost", since=L["since"])   # the same loss, a later hold
+    s.alert_poll()
+    assert [m for m in alerts(note) if LOST in m] == [f"{LOST}: first; the session holds", f"{LOST}: second; the session holds"]
+
+def test_a_failed_probe_keeps_identity_lost_when_the_tracking_cleared_it_during_the_turns(monkeypatch):
+    run_step, D = A.Session.run_step, {}
+    def rs(self, st, *a, **k):          # the tracking takes the candidate as ours while the turns run
+        if st.get("label") == "identity probe" and self.ours_lost is not None and not D:
+            D["lost"] = dict(self.ours_lost); self.ours_lost = None; self.us_last = dict(x=-1.0, y=0.5, t=self.clock())
+        return run_step(self, st, *a, **k)
+    monkeypatch.setattr(A.Session, "run_step", rs)
+    s, run, note, clk, t0 = twin_late((-1.0, 0.5), probes=1)
+    assert D and s.ours_lost is not None and (s.ours_lost["x"], s.ours_lost["y"]) == (D["lost"]["x"], D["lost"]["y"])
+    assert s.done == [] and any(NOT_OURS in m for m in alerts(note))
+
+def test_the_not_ours_message_names_the_mirror_when_the_positions_agree_with_y_flipped():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [("blue", 3, -1.0, 0.3)]}, budget=60)
+    world.set(robot=(-1.0, 0.3, 0.0)); s.snap(); world.set(robot=(-1.0, -0.3, 0.0)); q = s.snap()
+    assert s.mismatch(q) == ("the tools' robot at (-1.00, -0.30) is 0.60 m from blue 3 at (-1.00, +0.30) "
+                             "(the positions agree with y flipped: check --vision-mirror)")
+    world.set(robot=(-0.4, 0.3, 0.0)); q = s.snap()
+    assert s.mismatch(q) == "the tools' robot at (-0.40, +0.30) is 0.60 m from blue 3 at (-1.00, +0.30)"
