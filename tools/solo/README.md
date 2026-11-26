@@ -69,7 +69,12 @@ it is within 0.15 m + `--max-speed` (2.0 m/s) x the time since the anchor's dete
 strategy node ran then, or stopped within `--settle` s, 1.5, before: the robot stood; the settle window says only
 that it may move, it adds no distance), or when ours was unseen for 0.5 s or more, it reappears within `--reappear`
 m (0.15) of the anchor and no second robot of our colour and id was seen meanwhile (on the field's camera most
-dropouts end within 0.15 m; a farther reappearance is settled by the probe). Anything else is "which robot is ours
+dropouts end within 0.15 m; a farther reappearance is settled by the probe). The rule runs on the camera frames, not
+on the supervisor's polls: the vision reader keeps every sighting of our colour and id of the last 10 s, and each
+snapshot moves the anchor forward along them, frame to frame, with the same bound (0.15 m + `--max-speed` x the time
+between the sightings), so the time the supervisor takes no snapshot (a child being stopped, a sleep, the start alert)
+is not counted as our robot unseen; "unseen for 0.5 s" means no sighting continuous with the track for that long.
+Anything else is "which robot is ours
 was lost": the session holds, alerts at once (adding, while probes are left, that the session will try to recognise
 it by a short turn on the spot, when the hold is the one that runs the probe and the candidate, or with none in view
 the anchor, stands where a probe is accepted; a new loss goes out whatever the backoff of the last), and clears when

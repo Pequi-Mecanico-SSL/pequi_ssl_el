@@ -165,6 +165,80 @@ def test_our_robot_sliding_after_an_intruder_stops_a_fast_drive_is_not_lost_and_
         assert s.ours_lost is None and not s.not_ours and s.done == [1, 2] and len(starts) == 3, (react, decel, run.stops)
         assert not [m for m in alerts(note) if "which robot is ours" in m] and all(d <= lim for d, lim in checks)
 
+class SlowStop(A.SimRunner):
+    """a runner whose stop of a child takes STOP_S s of clock time (the signal, the child's zeros, its exit) during
+    which the supervisor takes no snapshot; the cameras keep sending"""
+    STOP_S = 1.2
+    def _pass(self, dur, watch, move=None, turn=None):
+        why = super()._pass(dur, watch, move, turn)
+        if why:
+            c = self.world.coasting; self.stopped_at = (self.clock.t, dict(c) if c else None); self.clock.t += self.STOP_S
+        return why
+
+def coast_at(c, t):
+    """the position at time t of a robot coasting as ScriptedWorld.coast(c) describes"""
+    sp = math.hypot(*c["v"]); dt = max(0.0, t - c["t0"]); tb = min(max(0.0, dt - c["react"]), sp / c["decel"])
+    d = sp * min(dt, c["react"]) + sp * tb - 0.5 * c["decel"] * tb * tb
+    return (c["p0"][0] + c["v"][0] / sp * d, c["p0"][1] + c["v"][1] / sp * d)
+
+def slow_stop_session(hide=False, twin=None):
+    """a goto at 1 m/s stopped by a robot entering our half at 1 s; the stop takes 1.2 s without snapshots while our
+    robot brakes 0.25 m (react 0.05 s, 2.5 m/s^2). hide: the cameras do not show our robot during those 1.2 s. twin
+    (dx, dy): from 0.3 s into the stop until 3 s after it a robot of our colour and id stands that far from where ours
+    stops. -> (session, runner, notifier, where ours stopped, the twin's position)"""
+    D = {}
+    def ours(t):
+        st = getattr(run, "stopped_at", None)
+        if st is None or st[1] is None or not st[0] <= t < st[0] + SlowStop.STOP_S: return world.robot[:2]
+        return coast_at(st[1], t)
+    def frames(t):
+        dt = t - D["t0"]; st = getattr(run, "stopped_at", None); rs = []
+        if not (hide and st is not None and st[0] <= t < st[0] + SlowStop.STOP_S): rs.append(("blue", 3, *ours(t), 0.0))
+        if 1.0 <= dt < 4.0: rs.append(("yellow", 1, -1.9, 1.2))
+        if twin and st is not None and st[0] + 0.3 <= t < st[0] + SlowStop.STOP_S + 3.0:
+            D["twin"] = (D["end"][0] + twin[0], D["end"][1] + twin[1]); rs.append(("blue", 3, *D["twin"], 0.0))
+        return {0: rs}
+    s, run, note, world, clk = make_cams([dict(kind="goto", x=GOAL[0], y=GOAL[1], label="g"), SPIN(label="after")], frames,
+                                         robot=(*START, 0.0), budget=300, switch_after=0)
+    run.__class__ = SlowStop; run.SPEED, run.REACT, run.DECEL = 1.0, 0.05, 2.5
+    world.vision.src.BACKLOG = 3.0                        # every frame of the stop reaches the vision reader
+    dist = math.hypot(GOAL[0] - START[0], GOAL[1] - START[1])
+    run.script = [dict(match="goto.py", line="arrived: robot at (-0.50, +1.20)", dur=dist, world={"robot": (*GOAL, 0.0)})]
+    go = run._pass
+    def pass_(*a, **k):
+        why = go(*a, **k)
+        if why: D["end"] = coast_at(run.stopped_at[1], run.stopped_at[0] + 10.0)
+        return why
+    run._pass = pass_
+    D["t0"] = clk.t
+    s.run()
+    return s, run, note, D.get("end"), D.get("twin")
+
+def test_a_stop_that_takes_1_2_s_without_snapshots_while_our_robot_brakes_in_view_keeps_its_identity():
+    s, run, note, end, _ = slow_stop_session()
+    c = run.stopped_at[1]
+    assert abs(math.hypot(end[0] - c["p0"][0], end[1] - c["p0"][1]) - 0.25) < 0.005      # it braked 0.25 m
+    assert run.stops and run.stops[0][1].startswith("another robot: yellow1")
+    assert s.ours_lost is None and not s.not_ours and not [m for m in alerts(note) if "which robot is ours" in m]
+    intr = [m for m in alerts(note) if m.startswith("another robot (yellow 1) entered our half")]
+    assert len(intr) == 1 and "(not seen)" not in intr[0], alerts(note)
+    x, y = (float(v) for v in intr[0].split("our robot stopped at (")[1].split(")")[0].split(","))
+    assert math.hypot(x - end[0], y - end[1]) <= 0.02, (intr[0], end)
+    assert s.done == [1, 2] and len(run.cmds("goto.py")) == 2 and not PROBES(run)
+
+def test_a_stop_that_takes_1_2_s_with_our_robot_really_unseen_and_reappearing_0_25_m_away_is_lost():
+    s, run, note, end, _ = slow_stop_session(hide=True)
+    lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
+    assert lost and "0.25 m from where ours last stood" in lost[0] and not s.not_ours, alerts(note)
+    assert float(lost[0].split("ours unseen for ")[1].split(" s)")[0]) >= 1.2
+
+def test_a_twin_appearing_0_4_m_from_ours_during_a_stop_without_snapshots_is_two_copies_and_never_taken_as_ours():
+    s, run, note, end, tw = slow_stop_session(twin=(0.4, 0.0))
+    two = [m for m in alerts(note) if m.startswith("two robots are seen as blue 3")]
+    assert two and f"({tw[0]:+.2f}, {tw[1]:+.2f})" in two[0] and not s.not_ours, alerts(note)
+    assert s.ours_lost is None and math.hypot(s.us_last["x"] - tw[0], s.us_last["y"] - tw[1]) > 0.3
+    assert not [m for m in alerts(note) if "which robot is ours was lost" in m] and s.done == [1, 2]
+
 def test_a_3_s_dropout_during_a_strategy_step_ends_with_our_robot_proved_by_its_turn():
     st = dict(kind="strategy", on=True, seconds=6, side="negative", label="play")
     s0 = {}

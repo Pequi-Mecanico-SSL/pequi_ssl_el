@@ -695,11 +695,13 @@ class RawVision:
     NEAR_D of a sighting of another colour + id of the last PAIR_S (a robot whose id is read differently from frame
     to frame; the colour + id in `own`, our robot, does not confirm another); or one whose camera sends no newer
     frame within CONFIRM_S. A single isolated sighting is not confirmed.
+    own_track: [(age, x, y)] of every sighting of `own` (any camera) of the last OWN_HIST s, oldest first: the
+    supervisor follows our robot on these frames, also across the time it took no snapshot.
     thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
     def __init__(self, source, clock=time.time, keep=VISION_FRESH, thread=True, cameras=None):
         self.src, self.clock, self.keep = source, clock, keep; self.L = threading.Lock(); self.cam_t = {}; self.seen = {}
         self.cameras = None if cameras is None else sorted(int(c) for c in cameras); self.unlisted = []; self.own = None
-        self.halt = threading.Event(); self.threaded = thread
+        self.halt = threading.Event(); self.threaded = thread; self.own_hist = deque()
         if thread: threading.Thread(target=self._loop, daemon=True).start()
     def _loop(self):
         while not self.halt.is_set():
@@ -711,6 +713,7 @@ class RawVision:
     NEAR_D = 0.2                        # m: a sighting this close to a recent one of another colour + id is confirmed
     SLOW_S, SLOW_V = 1.0, 2.0           # s, m/s: a sighting within NEAR_D + SLOW_V x the gap of the last one of its colour + id
                                         # (same camera) of the last SLOW_S s is confirmed (a robot detected only now and then)
+    OWN_HIST = 10.0                     # s: the sightings of our colour + id kept for following our robot frame by frame
     def feed(self, robots):
         t = self.clock(); cam = 0
         if isinstance(robots, tuple) and len(robots) == 3 and isinstance(robots[1], list): cam, robots, t = robots   # a fake's frame time
@@ -732,6 +735,8 @@ class RawVision:
                 if not ok and k != self.own:
                     ok = any(k2 != k and math.hypot(x - x2, y - y2) <= self.NEAR_D for k2, ps2 in recent for x2, y2, _ in ps2 for x, y, _ in ps)
                 self.seen[(cam, k)] = (t, ps, ok)
+                if k == self.own: self.own_hist.extend((t, x, y) for x, y, _ in ps)
+            while self.own_hist and self.own_hist[0][0] < t - self.OWN_HIST: self.own_hist.popleft()
     def snapshot(self):
         if not self.threaded:
             for _ in range(1000):
@@ -747,9 +752,10 @@ class RawVision:
                      ok or (self.cam_t[c] == tt and t - tt >= self.CONFIRM_S - 1e-9)) for c, k, tt, ps, ok in live for x, y, _ in ps]
             poses = [(k[0], k[1], x, y, th, round(t - tt, 3)) for c, k, tt, ps, ok in live for x, y, th in ps if th is not None]
             unlisted = list(self.unlisted)
+            track = [(round(t - tt, 3), x, y) for tt, x, y in sorted(self.own_hist)]
         ages = [cam_age.get(c, 1e9) for c in cams]; merged = merge_dets(dets, flags=True)
         return dict(vision_age=max(ages) if ages else 1e9, cam_age=cam_age, vision_dets=[d for d, ok in merged],
-                    vision_unconfirmed=[d for d, ok in merged if not ok], vision_poses=poses, unlisted=unlisted)
+                    vision_unconfirmed=[d for d, ok in merged if not ok], vision_poses=poses, unlisted=unlisted, own_track=track)
 
 def open_vision(group=VISION_GROUP, port=VISION_PORT, iface="0.0.0.0", mirror=False, cameras=None):
     """-> (RawVision, None) or (None, why it cannot be opened)"""
@@ -1283,6 +1289,7 @@ class Session:
                 else: amb = f"{len(mine)} robots seen as {who}, none within {MATCH_D} m of the tools' robot"
             elif len(mine) == 1: us = mine[0]
             elif mine: amb = f"{len(mine)} robots seen as {who} and the tools' robot not known"
+            self.follow_us(s.get("own_track"))
             us, s["us_lost"] = self.track_us(mine, us, amb)
             s["raw_us"] = (us[2], us[3], us[4]) if us is not None else None; s["us_ambiguous"] = amb
             s["twins"] = [(round(d[2], 2), round(d[3], 2)) for d in sorted(mine, key=lambda d: (d[2], d[3]))] if len(mine) > 1 else []
@@ -1354,6 +1361,24 @@ class Session:
             near = [d for d in mine if math.hypot(d[2] - p["x"], d[3] - p["y"]) <= self.id_bound(now - d[4])]
             if len(near) == 1: self.keep_us(near[0], now, alone=False)
         return us, None
+    def follow_us(self, track):
+        """follow our robot on the camera frames between snapshots (RawVision's own_track: every sighting of our
+        colour + id, oldest first), so that the time the supervisor took no snapshot (a child being stopped, a sleep)
+        is not counted as our robot unseen: from the anchor forward, each sighting within ID_TIGHT plus max_speed x the
+        time since the anchor's (when it may have been moving) moves the anchor to it; a sighting REAPPEAR_GAP s or
+        more after the anchor's is a real gap and is left to track_us (reappearance), as is any sighting after two
+        copies were seen that comes more than FOLLOW_GAP s after the anchor's. Sightings farther away (another copy)
+        are skipped; while identity is lost the anchor stays"""
+        p = self.us_last
+        if not track or p is None or self.ours_lost is not None: return
+        now = self.clock(); x, y, t = p["x"], p["y"], p["t"]
+        for age, qx, qy in track:
+            tq = now - age; dt = tq - t
+            if dt <= 0: continue
+            if dt >= self.REAPPEAR_GAP or (self.twins_seen and dt > self.FOLLOW_GAP): break
+            lim = self.ID_TIGHT + (self.max_speed * dt if self.may_move(t, tq) else 0.0)
+            if math.hypot(qx - x, qy - y) <= lim: x, y, t = qx, qy, tq
+        if t > p["t"]: self.keep_us((None, None, x, y, now - t), now, alone=False)
     def keep_us(self, d, now, alone):
         """our robot's last unambiguous position from detection d (kept with the detection's time)"""
         t_det = now - d[4]
