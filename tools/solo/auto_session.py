@@ -91,12 +91,16 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   no stop ever waits for the alert command (a stop comes first, its alert after); a failed send is retried after 15,
   30, 60 s, then every 60 s, in order; an alert older than 10 min is dropped and counted ("N earlier alerts were not
   delivered since HH:MM: ..." starts the next one delivered); every failure is in the session log. When no alert has
-  been delivered for --alert-dead s, no motion step runs (the robot stands, the hold of no information) until one
-  is; the first alert delivered then says so. At the end the session waits up to 20 s for the queue. The supervisor listens to the
+  been delivered for --alert-dead s (counted from the first failed send or from the oldest alert still waiting, an
+  alert command that never returns included), no motion step runs (the robot stands, the hold of no information)
+  until one is; the first alert delivered then says so. The sending thread is watched: ended, it is started again
+  once (logged); ended again, the alert channel is dead for the rest of the session. At the end the session waits up to 20 s for the queue. The supervisor listens to the
   vision multicast itself (receive only: --vision GROUP:PORT, default 224.5.23.2:10006; --vision-iface ADDR, default
   $SOLO_IFACE or 0.0.0.0; --vision-mirror when the connector runs with mirror:=true) and sees every robot of both
   colours with its vision id; our robot is the detection of our colour and id within 0.25 m of the robot the tools
-  drive. Two detections of one camera frame are always two robots; two cameras' detections of one colour + id are
+  drive. A robot of another colour or id counts from its second consecutive frame of one camera (or when that camera
+  sends no newer frame within 0.1 s): a false detection or a misread id in a single frame stops nothing. Two
+  detections of one camera frame are always two robots; two cameras' detections of one colour + id are
   one robot when closer than 0.15 m plus 2 m/s per second of frame age difference (at most 0.35 m), or, for one its
   camera no longer sees, 3 m/s (at most 0.8 m). Every other detection is another robot. Our robot's last unambiguous
   position is kept with the time of its detection: a position taken as ours farther from it than 0.15 m + --max-speed
@@ -109,7 +113,8 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   seen as blue 3: at (x, y) and (x, y), the tools cannot tell which is ours; the session holds". If the
   listener cannot be opened or the generated vision messages cannot be imported, the session does not start (without
   a home area: a warning that other robots are not watched). The robot the tools drive (the page's, through the
-  connector's index) must stand within 0.25 m of ours in the raw vision: at start, else the session does not start;
+  connector's index) must stand within 0.25 m of ours in the raw vision (ours detected within the last 0.1 s; an
+  older detection kept after its camera stopped showing it is not compared): at start, else the session does not start;
   during the session, else all motion stops, "the robot the tools are driving is not ours: ..." and the session ends.
   Start, left half: the same as above, e.g.
       python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball.jsonl --budget 10 --our-id N --cameras C
@@ -562,6 +567,7 @@ VISION_GROUP, VISION_PORT = "224.5.23.2", 10006    # the vision multicast (the o
 VISION_FRESH = 0.5                  # the raw view and our robot's position: older = no information
 PAGE_FRESH = 1.0                    # the field page's /state: older = no information
 MATCH_D = 0.25                      # the page's robot and ours in the raw vision: farther apart = not the same robot
+MATCH_AGE = 0.1                     # s: an older detection of ours (kept after its camera stopped showing it) is not compared
 
 def frame_camera(w):
     """the camera id of a detection frame"""
@@ -605,8 +611,9 @@ MERGE_CAP = 0.35                    # m: ... up to this distance
 SPEED_MAX = 3.0                     # m/s: a sighting its own camera no longer confirms (newer frames without it): the robot moved on
 LEFT_CAP = 0.8                      # m: ... up to this distance
 
-def merge_dets(dets):
-    """[(colour, id, x, y, age, camera, left)] -> [(colour, id, x, y, age)] with the sightings of one robot merged.
+def merge_dets(dets, flags=False):
+    """[(colour, id, x, y, age, camera, left[, confirmed])] -> [(colour, id, x, y, age)] with the sightings of one robot merged
+    (flags: [((colour, id, x, y, age), confirmed)], confirmed when one of its sightings is).
     Two sightings of one camera (one frame) are never merged: they are two robots. Sightings of two cameras with the
     same colour + id are merged when closer than MERGE_D plus MERGE_SPEED per second of age difference, at most
     MERGE_CAP; for an older sighting its camera no longer confirms (left: that camera's newer frames do not hold this
@@ -617,14 +624,15 @@ def merge_dets(dets):
         c, i, x, y, a = q[:5]; cam = q[5] if len(q) > 5 else 0; left = bool(q[6]) if len(q) > 6 else False
         best = None
         for g in groups:
-            o, cams = g
+            o, cams = g[0], g[1]
             if c != o[0] or i != o[1] or cam in cams: continue
             dt = abs(a - o[4]); d = math.hypot(x - o[2], y - o[3])
             lim = min(MERGE_D + SPEED_MAX * dt, LEFT_CAP) if left else min(MERGE_D + MERGE_SPEED * dt, MERGE_CAP)
             if d < lim and (best is None or d < best[0]): best = (d, g)
-        if best is not None: best[1][1].add(cam)
-        else: groups.append([(c, i, x, y, a), {cam}])
-    return [g[0] for g in groups]
+        ok = bool(q[7]) if len(q) > 7 else True
+        if best is not None: best[1][1].add(cam); best[1].append(ok)
+        else: groups.append([(c, i, x, y, a), {cam}, ok])
+    return [(g[0], any(g[2:])) for g in groups] if flags else [g[0] for g in groups]
 
 class RawVision:
     """the supervisor's own view of the robots: every robot of both colours with its vision id, from the packets of a
@@ -634,7 +642,9 @@ class RawVision:
     frame or two is not gone). snapshot: cam_age {camera: age of its last detection frame}; vision_age: the age of the
     stalest camera (listed in `cameras`, a camera never seen counting as never; without the list, the cameras seen so
     far; a camera that sends without being listed is listed from then on, `unlisted` names it); vision_dets:
-    [(colour, id, x, y, age)] merged across cameras (merge_dets).
+    [(colour, id, x, y, age)] merged across cameras (merge_dets); vision_unconfirmed: those of vision_dets seen in a
+    single frame so far (confirmed: two consecutive frames of its camera, or no newer frame of that camera within
+    CONFIRM_S).
     thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
     def __init__(self, source, clock=time.time, keep=VISION_FRESH, thread=True, cameras=None):
         self.src, self.clock, self.keep = source, clock, keep; self.L = threading.Lock(); self.cam_t = {}; self.seen = {}
@@ -646,16 +656,19 @@ class RawVision:
             try: f = self.src.read(0.2)
             except Exception: f = None; self.halt.wait(0.2)
             if f is not None: self.feed(f)
+    CONFIRM_S = 0.1                     # s: a sighting of one frame counts when its camera sends no newer frame this long
     def feed(self, robots):
         t = self.clock(); cam = 0
         if isinstance(robots, tuple) and len(robots) == 2 and isinstance(robots[1], list): cam, robots = robots
         cam = int(cam); fr = {}
         for col, i, x, y in robots: fr.setdefault((col, int(i)), []).append((float(x), float(y)))
         with self.L:
-            self.cam_t[cam] = t
+            prev = self.cam_t.get(cam); self.cam_t[cam] = t
             if self.cameras is not None and cam not in self.cameras:
                 self.cameras = sorted(self.cameras + [cam]); self.unlisted.append(cam)
-            for k, ps in fr.items(): self.seen[(cam, k)] = (t, ps)
+            for k, ps in fr.items():
+                old = self.seen.get((cam, k))
+                self.seen[(cam, k)] = (t, ps, old[2] + 1 if old is not None and old[0] == prev else 1)    # consecutive frames
     def snapshot(self):
         if not self.threaded:
             for _ in range(1000):
@@ -666,11 +679,13 @@ class RawVision:
         with self.L:
             cam_age = {c: round(t - tt, 2) for c, tt in self.cam_t.items()}
             cams = self.cameras if self.cameras is not None else sorted(cam_age)
-            dets = [(k[0], k[1], x, y, round(t - tt, 2), c, self.cam_t[c] > tt) for (c, k), (tt, ps) in self.seen.items()
-                    if t - tt <= self.keep for x, y in ps]
+            dets = [(k[0], k[1], x, y, round(t - tt, 2), c, self.cam_t[c] > tt,
+                     n >= 2 or (self.cam_t[c] == tt and t - tt >= self.CONFIRM_S - 1e-9))
+                    for (c, k), (tt, ps, n) in self.seen.items() if t - tt <= self.keep for x, y in ps]
             unlisted = list(self.unlisted)
-        ages = [cam_age.get(c, 1e9) for c in cams]
-        return dict(vision_age=max(ages) if ages else 1e9, cam_age=cam_age, vision_dets=merge_dets(dets), unlisted=unlisted)
+        ages = [cam_age.get(c, 1e9) for c in cams]; merged = merge_dets(dets, flags=True)
+        return dict(vision_age=max(ages) if ages else 1e9, cam_age=cam_age, vision_dets=[d for d, ok in merged],
+                    vision_unconfirmed=[d for d, ok in merged if not ok], unlisted=unlisted)
 
 def open_vision(group=VISION_GROUP, port=VISION_PORT, iface="0.0.0.0", mirror=False, cameras=None):
     """-> (RawVision, None) or (None, why it cannot be opened)"""
@@ -895,14 +910,19 @@ class AlertSender:
     simulated clock). A failed send is retried after RETRY s (then every RETRY[-1] s), the order kept; an alert older
     than max_age s is dropped (unless kept) and counted, and the next one delivered starts with "N earlier alerts were
     not delivered since HH:MM". Quiet notices go through the same queue, tried once. failing_for(): how long alerts
-    have been waiting without a delivery since a send failed (0 = none failing)"""
+    have been waiting without a delivery: since a send failed, or the age of the oldest alert in the queue, whichever
+    is longer (0 = none waiting). alive(): the thread runs; start(): a new thread"""
     RETRY = (15.0, 30.0, 60.0)
     def __init__(self, notifier, clock=time.time, log=None, thread=True, max_age=600.0):
         self.notifier = notifier; self.clock = clock; self.logf = log or (lambda kind, **kw: None); self.max_age = max_age
         self.q = deque(); self.L = threading.Lock(); self.wake = threading.Event(); self.halt = threading.Event()
         self.fails = 0; self.next_t = -1e18; self.fail_since = None; self.dropped = 0; self.drop_since = None
-        self.delivered = 0; self.busy = False; self.threaded = thread
-        if thread: threading.Thread(target=self._loop, daemon=True).start()
+        self.delivered = 0; self.busy = False; self.threaded = thread; self.thread = None
+        if thread: self.start()
+    def start(self):
+        self.thread = threading.Thread(target=self._loop, daemon=True); self.thread.start()
+    def alive(self):
+        return not self.threaded or (self.thread is not None and self.thread.is_alive())
     def put(self, msg, title, keep=False, front=False, notice=False):
         it = dict(msg=msg, title=title, t=self.clock(), keep=keep, notice=notice)
         with self.L:
@@ -914,7 +934,10 @@ class AlertSender:
         with self.L: return len(self.q)
     def failing_for(self, now=None):
         now = self.clock() if now is None else now
-        with self.L: return 0.0 if self.fail_since is None or not self.q else now - self.fail_since
+        with self.L:
+            ts = [it["t"] for it in self.q if not it["notice"]]
+            if self.fail_since is not None and self.q: ts.append(self.fail_since)
+        return max(0.0, now - min(ts)) if ts else 0.0
     def _loop(self):
         while not self.halt.is_set():
             try: self.pump()
@@ -1004,7 +1027,7 @@ class Session:
                  home_auto=False, cameras=None, alert_dead=300.0, alert_thread=None, settle=1.5, max_speed=2.0):
         self.cameras = None if cameras is None else sorted({int(c) for c in cameras})
         self.log_lock = threading.Lock(); self.alert_keys = {}; self.kinds_sent = set(); self.floor_buf = []; self.t_out = -1e18
-        self.last_send = None; self.alert_dead = alert_dead; self.dead = None
+        self.last_send = None; self.alert_dead = alert_dead; self.dead = None; self.sender_restarts = 0
         self.us_last = None; self.ours_lost = None; self.twins_seen = False     # telling our robot apart (snap)
         self.moving = False; self.moves = []; self.settle = settle; self.max_speed = max_speed   # motion intervals [start, end]
         self.holding = None                                                     # the current hold: since, cause
@@ -1092,25 +1115,35 @@ class Session:
         self.sender.put(msg, title)
     def alert_poll(self):
         """called from every poll of the world: the alerts the rate floor held once it has passed; the sender (a
-        simulated clock); a dead alert channel (no alert delivered for alert_dead s while one fails)"""
+        simulated clock); a dead alert channel (no alert delivered for alert_dead s while one fails or waits); the
+        sender's thread alive (restarted once; if it ends again the channel is dead)"""
         now = self.clock()
         if self.floor_buf and now - self.t_out >= self.ALERT_FLOOR:
             m = self.floor_buf.pop(0); self.dispatch(m, kind="merged")
         self.sender.notifier = self.notifier
         if not self.sender.threaded: self.sender.pump()
         f = self.sender.failing_for(now)
+        if not self.sender.alive():
+            if not self.sender_restarts:
+                self.sender_restarts += 1; self.log("alert_sender_restarted", note="the alert sender's thread had ended: started again")
+                self.sender.start()
+            elif self.dead is None:
+                self.dead = dict(since=now, fail_since=now - f, thread=True)
+                self.log("alert_channel_dead", failing_for=round(f, 1), note="the alert sender's thread ended again: no motion step runs")
+            return
         if self.dead is None and self.alert_dead and f >= self.alert_dead:
             since = time.strftime("%H:%M:%S", time.localtime(now - f))
             self.dead = dict(since=now, fail_since=now - f)
             self.log("alert_channel_dead", failing_for=round(f, 1), note="no alert delivered: no motion step runs until one is")
             self.sender.put(f"no alert could be delivered from {since} for {f:.0f} s: the session held all motion (robot standing) "
                             f"from {time.strftime('%H:%M:%S', time.localtime(now))} until alerts were delivered again", "field session", keep=True, front=True)
-        elif self.dead is not None and f == 0.0 and not self.sender.pending():
+        elif self.dead is not None and not self.dead.get("thread") and f == 0.0 and not self.sender.pending():
             self.log("alert_channel_back", dead_for=round(now - self.dead["since"], 1)); self.dead = None
     def dead_text(self):
         """with a home area: why motion holds for the alert channel, or None"""
         if self.dead is None: return None
-        return f"no alert delivered since {time.strftime('%H:%M:%S', time.localtime(self.dead['fail_since']))}: the alert command fails"
+        why = "the alert sender stopped" if self.dead.get("thread") else "the alert command fails"
+        return f"no alert delivered since {time.strftime('%H:%M:%S', time.localtime(self.dead['fail_since']))}: {why}"
     def send_now(self, msg, title="field session", kind="start"):
         """the start alert: sent synchronously (the session starts only when it is delivered)"""
         r = self.notifier.send(msg, title) if self.notifier else "no notifier"
@@ -1142,7 +1175,8 @@ class Session:
     def snap(self):
         """the world's snapshot; with a home area every detection of the raw vision view is another robot except ours:
         the one of our colour + id within MATCH_D of the robot the tools drive (the page's), or, while the page's robot
-        is not fresh, the only one of our colour + id. Any other copy of our colour + id is another robot; when it
+        is not fresh, the only one of our colour + id. A robot of another colour or id seen in a single frame so far
+        (vision_unconfirmed) is left out of others. Any other copy of our colour + id is another robot; when it
         cannot be told which one is ours, us_ambiguous says why (no information). raw_us: ours, (x, y, age) or None.
         twins: [(x, y)] of every robot seen as our colour + id when there are two or more (no information: the
         connector may follow either). A camera that sends without being listed is listed from then on (logged once).
@@ -1174,7 +1208,8 @@ class Session:
             us, s["us_lost"] = self.track_us(mine, us, amb)
             s["raw_us"] = (us[2], us[3], us[4]) if us is not None else None; s["us_ambiguous"] = amb
             s["twins"] = [(round(d[2], 2), round(d[3], 2)) for d in sorted(mine, key=lambda d: (d[2], d[3]))] if len(mine) > 1 else []
-            s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us)]
+            single = s.get("vision_unconfirmed") or []             # another robot counts from its second frame
+            s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us and ((d[0], int(d[1])) == me or d not in single))]
         return s
     ID_TIGHT = 0.15                     # m: how far our robot may seem to move while it stands (detection noise)
     def motion(self, on):
@@ -1272,13 +1307,16 @@ class Session:
         at = ", ".join(f"({x:+.2f}, {y:+.2f})" for x, y in twins[:-1]) + f" and ({twins[-1][0]:+.2f}, {twins[-1][1]:+.2f})"
         return f"{n} robots are seen as {self.team} {self.our_id}: at {at}, the tools cannot tell which is ours"
     def mismatch(self, s):
-        """the robot the tools drive (the page's, through the connector) is not ours (colour + id in the raw view)"""
+        """the robot the tools drive (the page's, through the connector) is not ours (colour + id in the raw view).
+        Ours kept older than MATCH_AGE (its camera no longer shows it) is not compared with the page's fresh position:
+        our robot not seen, no information"""
         if self.home is None or "vision_dets" not in s: return None
         r = s.get("robot") if s.get("robot") is not None and s.get("robot_age", 9) <= VISION_FRESH else None
         if r is None or s.get("vision_age", 9) > VISION_FRESH: return None
         if s.get("twins") or s.get("us_ambiguous") or s.get("us_lost"): return None     # which one is ours cannot be told: no information
         o = s.get("raw_us")
-        if o is not None and o[2] <= VISION_FRESH:
+        if o is not None and o[2] > MATCH_AGE: return None
+        if o is not None:
             d = math.hypot(r[0] - o[0], r[1] - o[1])
             if d > MATCH_D: return f"the tools' robot at ({r[0]:+.2f}, {r[1]:+.2f}) is {d:.2f} m from {self.team} {self.our_id} at ({o[0]:+.2f}, {o[1]:+.2f})"
             return None
@@ -1631,8 +1669,12 @@ class Session:
         return False
     def ensure_home_clear(self, inside_only=False):
         """-> True when no other robot is inside the home area (or near ours, unless inside_only) and the information
-        is complete; else the hold (intrusion_hold) decides"""
-        s = self.look(); ni = self.no_info(s); w = [] if ni else self.intrusion(s)
+        is complete; else the hold (intrusion_hold) decides. A robot seen in a single frame so far is looked at once
+        more after RawVision.CONFIRM_S before a step starts"""
+        s = self.look()
+        me = (self.team, self.our_id)
+        if any((d[0], int(d[1])) != me for d in s.get("vision_unconfirmed") or ()): self.sleep(RawVision.CONFIRM_S); s = self.look()
+        ni = self.no_info(s); w = [] if ni else self.intrusion(s)
         if inside_only: w = [q for q in w if q[3] == "inside"]
         return True if not w and not ni else self.intrusion_hold(w, self.our_pos(s), during=False, inside_only=inside_only)
     def wait_clear(self, ok, limit):
