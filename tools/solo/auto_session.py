@@ -385,7 +385,7 @@ GOTO_MARGIN = 0.25                  # m: the series drive to a test's start keep
 
 def goto_area(home):
     """SOLO_GOTO_BOX of a series step with a home area: the home area shrunk by GOTO_MARGIN along its open edges only
-    (characterize.py goto has no early braking: it stops when it leaves the box, at up to 0.6 m/s); walls stay"""
+    (characterize.py goto has no early braking: it stops when it leaves its box, at up to 0.6 m/s); walls stay"""
     e = open_edges(home); m = GOTO_MARGIN
     return [home[0] + m if e["x0"] else home[0], home[1] - m if e["x1"] else home[1],
             home[2] + m if e["y0"] else home[2], home[3] - m if e["y1"] else home[3]]
@@ -2057,7 +2057,7 @@ class Session:
     def fetch(self, s, wait=None):
         """bring a ball resting outside the home area (at most fetch_limit beyond it) back to the parking spot, only
         while the home area holds no other robot, none is near ours and the corridor (robot -> ball -> parking spot)
-        is clear, all of it known and clear for clear_s (from the start of the incident: a first attempt waits too);
+        is clear, all of it known and clear for clear_s (from the start of the incident: a first try waits too);
         the fetch runs with the full motion check plus the corridor; -> True when the ball is back inside"""
         wait = self.fetch_wait if wait is None else wait
         if self.fetch_inc is None: self.fetch_inc = dict(since=self.clock(), tries=0, alerts=0, t_block=self.clock())

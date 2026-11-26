@@ -121,7 +121,7 @@ def goto_env(env):
 
 def into_goto_box(p, d=0.05):
     """the point of SOLO_GOTO_BOX nearest to p, d inside its edges (the drive there stops at the edge of that box; the
-    test then drives the rest of the way to its start inside its own box); None when the box is not one rectangle
+    test then drives the rest of the way to its start inside its own box); None when SOLO_GOTO_BOX is not one rectangle
     and p lies outside it"""
     rs = [[float(v) for v in r.split(",")] for r in os.environ.get("SOLO_GOTO_BOX", "").split(";") if r.strip()]
     if any(r[0] + d <= p[0] <= r[1] - d and r[2] + d <= p[1] <= r[3] - d for r in rs): return p
