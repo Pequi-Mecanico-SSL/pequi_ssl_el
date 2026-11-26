@@ -225,7 +225,7 @@ def test_robot_of_our_colour_with_another_id_intruding_stops_the_step():
         return out
     s, run, note, world, clk = make_raw([SPIN(label="spin")], frames)
     t_in[0] = clk.t + 2.0; s.run()
-    assert run.stops and run.stops[0][1].startswith("another robot: blue5") and run.stops[0][0] - t_in[0] <= 0.1 + 1e-6
+    assert run.stops and run.stops[0][1].startswith("another robot: blue5") and run.stops[0][0] - t_in[0] <= 0.2 + 1e-6   # its second frame
     assert alerts(note)[0].startswith("another robot (blue 5) entered our half")
 
 def test_more_than_three_robots_of_the_other_colour_are_all_watched():

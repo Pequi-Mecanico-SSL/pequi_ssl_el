@@ -95,9 +95,10 @@ def test_our_robot_seen_continuously_while_a_step_moves_it_is_not_lost():
 REACT, DECEL = 0.15, 3.0                    # s, m/s^2: the simulated robot after a stop (reaction delay, then braking)
 START, GOAL = (-2.0, -1.2), (-0.5, 1.2)
 
-def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps=None, script=None, budget=300):
+def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps=None, script=None, budget=300, page_sees=False):
     """a goto from START to GOAL at speed (m/s), then a spin. drop (at, dur): from `at` s our robot's tag is not
-    detected for dur s (the connector does not see it either: the page keeps its last position). others(dt) -> robots
+    detected for dur s (the connector does not see it either: the page keeps its last position; page_sees: the page's
+    position stays fresh, as from a connector that still tracks it). others(dt) -> robots
     seen besides ours. -> (session, runner, notifier, clock, step starts, [(distance from the kept position, allowed)])"""
     D = {}
     def frames(t):
@@ -113,7 +114,7 @@ def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps
     snap0 = world.snapshot; F = {}
     def snap():
         d = snap0()
-        if drop is not None and drop[0] <= clk.t - D["t0"] < drop[0] + drop[1]:
+        if drop is not None and drop[0] <= clk.t - D["t0"] < drop[0] + drop[1] and not page_sees:
             F.setdefault("p", (d["robot"], clk.t)); d["robot"] = F["p"][0]; d["robot_age"] = round(clk.t - F["p"][1], 2)
         else: F.clear()
         return d
@@ -198,6 +199,13 @@ def test_our_robot_carried_1_m_away_while_the_session_holds_is_lost():
     s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")], frames, budget=60, switch_after=0)
     D["t0"] = clk.t; s.run()
     assert s.ours_lost is not None and s.done == [] and any(m.startswith("which robot is ours was lost") for m in alerts(note))
+
+def test_a_fresh_page_position_is_not_compared_with_a_raw_detection_its_camera_no_longer_shows():
+    s, run, note, clk, starts, checks = clean_session(1.5, (1.0, 0.4), page_sees=True)      # 0.4 s: up to 0.6 m apart
+    assert not s.not_ours and s.ours_lost is None and s.done == [1, 2] and run.stops == []
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=60)
+    q = s.snap(); world.set(robot=(-0.6, 0.0, 0.0)); q = s.snap()                           # both fresh, 0.4 m apart
+    assert s.mismatch(q) and s.mismatch(q).startswith("the tools' robot at (-0.60, +0.00) is 0.40 m from blue 3")
 
 # ---- 3. the wait before the drive back names its reason and where our robot stands
 OUT = ("blue", 3, 0.5, 0.0)                                                # outside the home area (x > -0.10)
@@ -315,6 +323,31 @@ def test_failed_alerts_are_retried_in_order_and_motion_holds_once_none_was_deliv
     assert up[-1].split(": ", 1)[-1].startswith("session ended")
 
 
+def test_an_alert_command_that_never_returns_makes_the_channel_dead_after_alert_dead_s():
+    gate = threading.Event()
+    class Hang:
+        def send(self, msg, title): gate.wait(10); return "rc 0"
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=900, alert_thread=True)
+    s.notifier = Hang(); s.alert("another robot (yellow 2) entered our half", kind="intruder", robot="yellow2")
+    try:
+        for _ in range(301):
+            clk.sleep(1.0); s.alert_poll()
+            if s.dead is not None: break
+        assert s.dead is not None and s.no_info(s.snap()).endswith(": the alert command fails")
+        assert 299 <= s.dead["since"] - s.dead["fail_since"] <= 301
+    finally: gate.set()
+
+def test_the_alert_sender_thread_ending_is_restarted_once_then_the_channel_is_dead():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=900, alert_thread=True)
+    rec = []; log = s.log
+    s.log = lambda kind, **k: (rec.append(kind), log(kind, **k))[1]
+    for n in (1, 2):                                        # the thread ends (as on an error it does not catch)
+        s.sender.halt.set(); s.sender.thread.join(2); assert not s.sender.thread.is_alive(); s.sender.halt.clear()
+        s.alert_poll()
+        if n == 1: assert s.sender.alive() and s.dead is None
+    assert rec.count("alert_sender_restarted") == 1 and "alert_channel_dead" in rec and s.dead["thread"]
+    assert s.no_info(s.snap()).endswith(": the alert sender stopped")
+
 # ---- 5. the alert rate
 class F:
     """a scenario from t0 on; before it our robot alone"""
@@ -350,3 +383,34 @@ def test_a_sighting_its_camera_no_longer_shows_merges_within_0_8_m_at_most():
     det = lambda d, a: [("blue", 3, -1.0, 0.0, 0.0, 0, False), ("blue", 3, -1.0 + d, 0.0, a, 1, True)]
     assert len(A.merge_dets(det(0.5, 0.2))) == 1 and len(A.merge_dets(det(0.75, 0.45))) == 1
     assert len(A.merge_dets(det(1.0, 0.45))) == 2 and len(A.merge_dets(det(0.85, 0.45))) == 2
+
+
+# ---- 7. a robot seen in a single frame
+def test_another_robot_seen_in_a_single_frame_does_not_stop_a_step_and_one_seen_in_two_frames_does():
+    for frames_with_it, stops in ((1, False), (2, True)):
+        T = {"n": 0}
+        def frames(t):
+            rs = [OURS]
+            if T.get("at") is not None and t >= T["at"] and T["n"] < frames_with_it:
+                T["n"] += 1; rs.append(("yellow", 2, -0.9, 0.15))              # a misread id next to ours
+            return {0: rs}
+        s, run, note, world, clk = make_cams([SPIN(label="spin")], frames, budget=60, switch_after=0)
+        T["at"] = clk.t + 1.0; s.run()
+        assert bool(run.stops) == stops and s.done == [1] and len(run.cmds("characterize.py")) == (2 if stops else 1), frames_with_it
+        assert bool([m for m in alerts(note) if "yellow 2" in m]) == stops, frames_with_it
+
+def test_a_single_frame_sighting_counts_when_its_camera_sends_no_newer_frame_within_0_1_s():
+    clk = A.SimClock(); q = []
+    class Src:
+        def read(self, timeout): return q.pop(0) if q else None
+    v = A.RawVision(Src(), clk, thread=False)
+    single = lambda: [d[:2] for d in v.snapshot()["vision_unconfirmed"] if d[0] == "yellow"]
+    q.append((0, [("yellow", 2, -0.5, 0.0)])); assert single() == [("yellow", 2)]
+    clk.t += 0.05; assert single() == [("yellow", 2)]
+    clk.t += 0.051; assert single() == []                                 # no newer frame from camera 0 within 0.1 s
+    q.append((1, [("yellow", 4, 0.5, 0.0)])); assert single() == [("yellow", 4)]
+    clk.t += 0.02; q.append((1, [])); clk.t += 0.2
+    assert single() == [("yellow", 4)]                                     # a newer frame of its camera without it
+    q.append((1, [("yellow", 5, 0.5, 0.5)])); single(); clk.t += 0.017; q.append((1, [("yellow", 5, 0.5, 0.5)]))
+    assert ("yellow", 5) not in single()                                   # two consecutive frames
+
