@@ -78,7 +78,8 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   --home "x0,x1,y0,y1" (or "home" in the session header; default: the whole field, no home checks) is where our robot
   works; its edges inside the field (more than 0.3 m from the lines) are "open": the side other teams use. Options:
   --corridor M (0.7), --fetch-wait S (60), --park X,Y (or "park" in the header), --intrude-dist M (1.0), --clear S (5),
-  --hold-limit S (120), --ball-hold S (30), --fetch-limit M (1.0), --info-alert S (10), --alert-dead S (300); --no-ball (or "ball": "ignore")
+  --hold-limit S (120), --ball-hold S (30), --fetch-limit M (1.0), --info-alert S (10), --alert-dead S (300), --settle S
+  (1.5), --max-speed M/S (2.0); --no-ball (or "ball": "ignore")
   for a session that never touches a ball.
   Required with a home area: --our-id N (or SOLO_OUR_ID=N), our robot's vision id; the field's cameras, --cameras N
   (ids 0..N-1, or SOLO_CAMERAS=N) or --camera-ids 0,1,... (or SOLO_CAMERA_IDS): a listed camera that has not sent a
@@ -98,10 +99,12 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   drive. Two detections of one camera frame are always two robots; two cameras' detections of one colour + id are
   one robot when closer than 0.15 m plus 2 m/s per second of frame age difference (at most 0.35 m), or, for one its
   camera no longer sees, 3 m/s (at most 0.8 m). Every other detection is another robot. Our robot's last unambiguous
-  position is kept: a position taken as ours more than 0.25 m + 1.5 m/s x the time motion ran since then from it
-  (0.15 m when no motion step ran: it stood), also the one left after two copies were seen, is "which robot is ours
-  was lost: ..." (no information, alerted at once); it clears only when one robot of our colour and id has been seen
-  within 0.15 m of that position for --clear s, never by time alone. Two or more robots seen as our colour and
+  position is kept with the time of its detection: a position taken as ours farther from it than 0.15 m + --max-speed
+  x the time our robot may have been moving since that detection (every interval a motion child or the strategy node
+  ran, each extended by --settle s after its stop for the reaction delay and braking; none of it: 0.15 m, it stood),
+  also the one left after two copies were seen, is "which robot is ours was lost: ..." (no information, alerted at
+  once, "...: put the robot back at (x, y) or restart the session"); it clears only when one robot of our colour and
+  id has been seen within 0.15 m of that position for --clear s, never by time alone. Two or more robots seen as our colour and
   id is no information (the connector may follow either): the session holds and alerts at once, "two robots are
   seen as blue 3: at (x, y) and (x, y), the tools cannot tell which is ours; the session holds". If the
   listener cannot be opened or the generated vision messages cannot be imported, the session does not start (without
@@ -172,8 +175,8 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
     "no vision for 10.2 s: the session holds"                                     -> check the vision computer / network
     "two robots are seen as blue 3: at (x, y) and (x, y), the tools cannot tell which is ours; the session holds"
                                                          -> ask the other team to change its id, or change --our-id
-    "which robot is ours was lost: ...; the session holds" -> put our robot back where it stood (the text says where),
-                                                              the other robot away from it
+    "which robot is ours was lost: ...; the session holds: put the robot back at (x, y) or restart the session"
+                                                           -> put our robot back there, the other robot away from it
     "the session has held for 10 s without 5 s known and clear: <causes>; the session holds"
                                                          -> check the vision of our robot (tag, lights, camera)
     "the robot the tools are driving is not ours: ..."      -> check --our-id and the connector (SOLO_OWN_COUNT, ids)
@@ -730,8 +733,23 @@ class ScriptedWorld:
         self.robot_on = robot is not None; self.ball_on = ball is not None; self.timeline = sorted(timeline, key=lambda e: e[0])
         self.vision = vision; self.our = our; self.vision_on = True; self.page_on = True; self.vision_t = self.page_t = clock()
         self.raw_robot = None                                       # set: our robot in the raw view elsewhere than on the page
+        self.coasting = None
+    def coast(self, v, react, decel):
+        """the robot keeps its velocity v (vx, vy) for react s, then brakes at decel m/s^2 to a standstill (a stopped
+        motion child: the robot's reaction delay and braking); set(robot=...) ends it"""
+        self.coasting = dict(t0=self.clock(), p0=tuple(self.robot), v=tuple(v), react=react, decel=decel)
+    def _coast(self):
+        c = self.coasting
+        if c is None or not self.robot_on: return
+        sp = math.hypot(*c["v"]); dt = self.clock() - c["t0"]
+        if sp < 1e-9: self.coasting = None; return
+        tb = min(max(0.0, dt - c["react"]), sp / c["decel"])
+        d = sp * min(dt, c["react"]) + sp * tb - 0.5 * c["decel"] * tb * tb
+        p0 = c["p0"]; self.robot = (p0[0] + c["v"][0] / sp * d, p0[1] + c["v"][1] / sp * d) + tuple(p0[2:]); self.robot_t = self.clock()
+        if dt - c["react"] >= sp / c["decel"]: self.coasting = None
     def set(self, **kw):
         t = self.clock()
+        if "robot" in kw: self.coasting = None
         if "vision" in kw: self.vision_on = bool(kw["vision"])
         if "page" in kw: self.page_on = bool(kw["page"])
         if "raw_robot" in kw: self.raw_robot = kw["raw_robot"]
@@ -743,6 +761,7 @@ class ScriptedWorld:
             if self.ball_on: self.ball = tuple(kw["ball"]); self.ball_t = t
         if "others" in kw: self.others = list(kw["others"])          # [(name, x, y)], e.g. ("yellow2", 0.4, 0.3)
     def snapshot(self):
+        self._coast()
         while self.timeline and self.timeline[0][0] <= self.clock(): self.set(**self.timeline.pop(0)[1])
         t = self.clock()
         if self.page_on:
@@ -982,12 +1001,13 @@ class Session:
                  home=None, no_ball=None, corridor=0.7, fetch_wait=60.0, fetch_tries=3, park=None, intrude_dist=1.0,
                  clear_s=5.0, hold_limit=120.0, ball_hold=30.0, ball_guard=0.6, edge_guard=0.9, our_id=None, vision_error=None,
                  robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0, switch_after=20.0, switch_cooldown=60.0, max_switches=4,
-                 home_auto=False, cameras=None, alert_dead=300.0, alert_thread=None):
+                 home_auto=False, cameras=None, alert_dead=300.0, alert_thread=None, settle=1.5, max_speed=2.0):
         self.cameras = None if cameras is None else sorted({int(c) for c in cameras})
         self.log_lock = threading.Lock(); self.alert_keys = {}; self.kinds_sent = set(); self.floor_buf = []; self.t_out = -1e18
         self.last_send = None; self.alert_dead = alert_dead; self.dead = None
         self.us_last = None; self.ours_lost = None; self.twins_seen = False     # telling our robot apart (snap)
-        self.moving = False; self.move_n = 0; self.move_acc = 0.0; self.t_move0 = None
+        self.moving = False; self.moves = []; self.settle = settle; self.max_speed = max_speed   # motion intervals [start, end]
+        self.holding = None                                                     # the current hold: since, cause
         self.cameras_given = None if self.cameras is None else list(self.cameras); self.cams_logged = set()
         self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
         self.home_auto = home_auto; self.half_sign = 1; self.switches = []; self.notices = []; self.pending = None; self.current = None
@@ -1033,17 +1053,19 @@ class Session:
             st["occ"] = since; st["between"] += 1
             self.log("alert_held", of=kind, robot=robot, held=st["between"], next_in=round(st["t"] + self.ALERT_BACKOFF[min(st["n"], len(self.ALERT_BACKOFF)) - 1] - now, 1))
         return False
-    def alert(self, msg, *, kind, robot=None, since=None, title="field session", urgent=False):
+    ALERT_LASTING = 20.0                # s: a cause that has lasted this long goes out whatever its backoff (force)
+    def alert(self, msg, *, kind, robot=None, since=None, title="field session", urgent=False, force=False):
         """an alert -> True when it was accepted (queued for the sender, or merged into the next one sent), False when
         the backoff of its cause holds it (alert_due: per (kind, robot), at once the first time, then not before 60 s,
         then not before 300 s; the occurrences in between are counted in the text of the next one). robot may be a
         list (one alert naming several robots, one key each). The rate floor: within ALERT_FLOOR s of the last alert
         sent, an alert of a kind already sent this session (except ALERT_NOW) waits and is merged into the next one
         sent (at the latest when the floor has passed). The caller repeats an alert held by the backoff while its cause
-        lasts. urgent (the start, the end, not ours, a node that does not stop): always sent at once"""
+        lasts. force: the backoff is skipped (a cause that has lasted ALERT_LASTING s; the rate floor still applies).
+        urgent (the start, the end, not ours, a node that does not stop): always sent at once"""
         now = self.clock(); robots = robot if isinstance(robot, list) else [robot]
         if not urgent:
-            if not all([self.alert_due(kind, r, since) for r in robots]): return False
+            if not force and not all([self.alert_due(kind, r, since) for r in robots]): return False
             between, t_prev = 0, None
             for r in robots:
                 st = self.alert_keys.setdefault((kind, r), dict(n=0, t=now, between=0, occ=None))
@@ -1154,25 +1176,33 @@ class Session:
             s["twins"] = [(round(d[2], 2), round(d[3], 2)) for d in sorted(mine, key=lambda d: (d[2], d[3]))] if len(mine) > 1 else []
             s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us)]
         return s
-    ID_TIGHT = 0.15                     # m: how far our robot may seem to move while no motion step runs (it stands)
-    ID_SLACK, ID_SPEED = 0.25, 1.5      # m, m/s: how far it may move while a motion step runs: slack + speed x motion time
+    ID_TIGHT = 0.15                     # m: how far our robot may seem to move while it stands (detection noise)
     def motion(self, on):
-        """a motion child (or the strategy node) starts (on) or has stopped: the time it ran bounds our robot's moves"""
+        """a motion child (or the strategy node) starts (on) or has stopped: the time it ran, plus settle s after
+        each stop (reaction and braking), bounds our robot's moves"""
         now = self.clock()
-        if on and not self.moving: self.moving = True; self.move_n += 1; self.t_move0 = now
-        elif not on and self.moving: self.moving = False; self.move_acc += now - self.t_move0
-    def motion_time(self, now):
-        return self.move_acc + (now - self.t_move0 if self.moving else 0.0)
+        if on and not self.moving: self.moving = True; self.moves.append([now, None])
+        elif not on and self.moving: self.moving = False; self.moves[-1][1] = now
+    def moving_time(self, t0, t1):
+        """how long within [t0, t1] our robot may have been moving: every interval a motion child or the strategy
+        node ran, each extended by settle s after its stop"""
+        total, end = 0.0, t0
+        for a, b in self.moves:
+            b = t1 if b is None else min(t1, b + self.settle)
+            a = max(a, end)
+            if b > a: total += b - a; end = b
+        return total
     def id_bound(self, now):
-        """how far our robot can be from its last unambiguous position now"""
-        p = self.us_last
-        if not self.moving and self.move_n == p["n"]: return self.ID_TIGHT        # no motion step since: it stood
-        return self.ID_SLACK + self.ID_SPEED * max(0.0, self.motion_time(now) - p["acc"])
+        """how far our robot can be from its last unambiguous position now: ID_TIGHT plus max_speed x the time it may
+        have been moving since that position's detection"""
+        return self.ID_TIGHT + self.max_speed * self.moving_time(self.us_last["t"], now)
     def track_us(self, mine, us, amb):
         """keep our robot's last unambiguous position (one robot of our colour + id, taken as ours); -> (us, why lost).
-        Lost: the position taken as ours is farther from it than id_bound (another robot with our colour + id, the
-        connector following it), also after two copies were seen and one disappeared. Lost holds until one robot of our
-        colour + id has been seen within ID_TIGHT of that position for clear_s without a break; time alone never clears it"""
+        The position is kept with its detection's time (now - its age). Lost: the position taken as ours is farther
+        from it than id_bound (another robot with our colour + id, the connector following it), also after two copies
+        were seen and one disappeared. While two or more are seen, the position follows the one copy within id_bound
+        of it (when exactly one is). Lost holds until one robot of our colour + id has been seen within ID_TIGHT of that
+        position for clear_s without a break; time alone never clears it"""
         now = self.clock(); who = f"{self.team} {self.our_id}"
         if len(mine) > 1: self.twins_seen = True
         if self.ours_lost is None and us is not None and len(mine) == 1 and amb is None and self.us_last is not None:
@@ -1191,9 +1221,23 @@ class Session:
             if now - L["t_ok"] < self.clear_s: return None, f"which robot is ours was lost: {L['why']}"
             self.log("ours_found", at=[round(mine[0][2], 3), round(mine[0][3], 3)], lost_for=round(now - L["since"], 1))
             self.ours_lost = None; us = mine[0] if us is None or us is mine[0] else us
-        if us is not None and len(mine) == 1 and amb is None:
-            self.us_last = dict(x=us[2], y=us[3], t=now, n=self.move_n, acc=self.motion_time(now)); self.twins_seen = False
+        if us is not None and len(mine) == 1 and amb is None: self.keep_us(us, now, alone=True)
+        elif len(mine) > 1 and self.us_last is not None:              # two copies: the one ours can have become
+            p = self.us_last; lim = self.id_bound(now)
+            near = [d for d in mine if math.hypot(d[2] - p["x"], d[3] - p["y"]) <= lim]
+            if len(near) == 1: self.keep_us(near[0], now, alone=False)
         return us, None
+    def keep_us(self, d, now, alone):
+        """our robot's last unambiguous position from detection d (kept with the detection's time)"""
+        t_det = now - d[4]
+        if self.us_last is None or t_det >= self.us_last["t"]:
+            self.us_last = dict(x=d[2], y=d[3], t=t_det)
+            if alone: self.twins_seen = False
+            self.moves = [m for m in self.moves if m[1] is None or m[1] + self.settle > t_det]
+    def lost_tail(self):
+        """what a person can do when which robot is ours was lost"""
+        L = self.ours_lost
+        return f"put the robot back at ({L['x']:+.2f}, {L['y']:+.2f}) or restart the session" if L else "restart the session"
     def our_pos(self, s):
         """our robot's position when it is fresh: ours in the raw view, else the page's; None = not known"""
         o = s.get("raw_us")
@@ -1449,13 +1493,24 @@ class Session:
                 h["t_alert"] = now; h["n"] = max(h["n"], 1)
             return ok
         def entered(ww, rb, now):
-            new = [q for q in ww if q[0] not in h["named"]]
-            for q in new: h["first"].setdefault(q[0], now)
-            due = [q for q in new if self.alert_due("intruder", q[0], h["first"][q[0]])]
-            if not due: return
-            msg = f"{self.robots_text(due)}; our robot {how_now} at {where(rb)}{', outside our half' if self.outside_note(p=rb) else ''}"
-            if sent(self.alert(msg, kind="intruder", robot=[q[0] for q in due], since=min(h["first"][q[0]] for q in due)), now):
-                h["named"].update(q[0] for q in due)
+            sent(self.alert_new_robots(ww, h, now, f"; our robot {how_now} at {where(rb)}{', outside our half' if self.outside_note(p=rb) else ''}"), now)
+        self.holding = dict(since=t0, cause=self.robots_text(w) if w else "no information")
+        try: return self._intrusion_hold(w, robot, t0, inc, h, sent, entered, inside_only)
+        finally:
+            if not self.out_of_time(): self.holding = None
+    def alert_new_robots(self, ww, h, now, tail):
+        """the robots of ww not yet named in this hold (h: named, first) in one alert, each robot its own backoff key
+        (a robot first seen ALERT_LASTING s ago goes out whatever its backoff); -> True when an alert was accepted"""
+        new = [q for q in ww if q[0] not in h["named"]]
+        for q in new: h["first"].setdefault(q[0], now)
+        lasting = lambda q: now - h["first"][q[0]] >= self.ALERT_LASTING
+        due = [q for q in new if self.alert_due("intruder", q[0], h["first"][q[0]]) or lasting(q)]
+        if not due: return False
+        if self.alert(f"{self.robots_text(due)}{tail}", kind="intruder", robot=[q[0] for q in due],
+                      since=min(h["first"][q[0]] for q in due), force=True):
+            h["named"].update(q[0] for q in due); return True
+        return False
+    def _intrusion_hold(self, w, robot, t0, inc, h, sent, entered, inside_only):
         entered(w, robot, t0)
         t_seen = t0; t_ni = None; self.motion_halted = True
         sw = dict(t_in=None, last=-1e9, other_bad=t0, corr_bad=t0, limit_sent=False)
@@ -1466,38 +1521,43 @@ class Session:
             ni = self.no_info(s); ww = [] if ni else self.intrusion(s)
             if inside_only: ww = [q for q in ww if q[3] == "inside"]
             if self.switch_rule(s, ni, ww, now, sw): self.motion_halted = False; return False
-            note = self.outside_note(s)
+            note = self.outside_note(s); lasting = lambda since: since is not None and now - since >= self.ALERT_LASTING
             if ni:
                 t_seen = now; t_ni = now if t_ni is None else t_ni
-                cause = re.sub(r"[-+]?\d+(?:\.\d+)?", "#", ni); h["causes"][cause] = ni
+                cause = re.sub(r"[-+]?\d+(?:\.\d+)?", "#", ni); h["causes"][cause] = ni; self.holding["cause"] = ni
                 if self.dead is not None and ni == self.dead_text():       # the alert channel itself: nothing to send
                     h["ni_sent"].add(cause); sent(True, now)
                 elif s.get("us_lost") and not h["lost_sent"]:               # which robot is ours was lost: at once
-                    if sent(self.alert(f"{ni}{note}; the session holds", kind="ours_lost", since=self.ours_lost and self.ours_lost["since"]), now):
+                    since = self.ours_lost and self.ours_lost["since"]
+                    if sent(self.alert(f"{ni}{note}; the session holds: {self.lost_tail()}", kind="ours_lost", since=since, force=lasting(since)), now):
                         h["lost_sent"] = True; h["ni_sent"].add(cause)
                 elif s.get("twins") and not h["twins_sent"]:                # two robots as ours: at once
                     h["twins_t"] = h["twins_t"] or now
-                    if sent(self.alert(f"{ni}{note}; the session holds", kind="twins", since=h["twins_t"]), now): h["twins_sent"] = True; h["ni_sent"].add(cause)
+                    if sent(self.alert(f"{ni}{note}; the session holds", kind="twins", since=h["twins_t"], force=lasting(h["twins_t"])), now):
+                        h["twins_sent"] = True; h["ni_sent"].add(cause)
             else:
                 t_ni = None
                 if ww:
-                    t_seen = now; entered(ww, self.our_pos(s), now)
+                    t_seen = now; entered(ww, self.our_pos(s), now); self.holding["cause"] = self.robots_text(ww)
                     for name, x, y, how in ww: h["causes"]["robot " + name] = f"another robot ({self.who(name)}) at ({x:+.2f}, {y:+.2f})"
                 elif now - t_seen >= self.clear_s:
                     self.motion_halted = False; self.log("intrusion_clear", held=round(now - inc["since"], 1)); return True
+            specific = False
             if ni and cause not in h["ni_sent"] and now - t_ni >= self.info_alert:   # no information without a break
-                if sent(self.alert(f"{ni}{note}: the session holds", kind="no_info", robot=cause, since=t_ni), now): h["ni_sent"].add(cause)
+                specific = sent(self.alert(f"{ni}{note}: the session holds", kind="no_info", robot=cause, since=t_ni, force=lasting(t_ni)), now)
+                if specific: h["ni_sent"].add(cause)
+            if specific: pass
             elif h["t_alert"] is None and now - t0 >= self.info_alert:      # nothing sent yet: the hold as a whole
                 msg = (f"the session has held for {now - t0:.0f} s without {self.clear_s:.0f} s known and clear: "
                        f"{'; '.join(h['causes'].values()) or 'no cause recorded'}{note}; the session holds")
-                sent(self.alert(msg, kind="hold", since=t0), now)
+                sent(self.alert(msg, kind="hold", since=t0, force=lasting(t0)), now)
             elif h["t_alert"] is not None and now - h["t_alert"] >= self.hold_limit and h["n"] < self.max_alerts:
                 n = h["n"] + 1
                 if ww: msg = (f"another robot ({self.who(ww[0][0])}) still in our half at ({ww[0][1]:+.2f}, {ww[0][2]:+.2f}) after "
                               f"{now - t0:.0f} s{note}: the session keeps holding (reminder {n}/{self.max_alerts})")
                 else: msg = (f"the session still holds after {now - t0:.0f} s: {ni or '; '.join(h['causes'].values()) or 'no cause recorded'}"
                              f"{note} (reminder {n}/{self.max_alerts})")
-                if sent(self.alert(msg, kind="hold_reminder", since=h["t_alert"]), now): h["n"] = n
+                if sent(self.alert(msg, kind="hold_reminder", since=h["t_alert"], force=True), now): h["n"] = n
             self.sleep(0.2)
         self.motion_halted = False
         return False
@@ -1674,7 +1734,9 @@ class Session:
         then one watched goto 0.3 m inside (path_watch). While it waits, ok() records why it is not clear: no
         information (no vision, which robot is ours), a robot inside our half, robots on the way back. The alert names
         that reason and where our robot stands: after info_alert s for the first two, after fetch_wait s for robots on
-        the way; then reminders every realert s (at most max_alerts). -> True when the robot arrived"""
+        the way; then reminders every realert s (at most max_alerts). A robot not yet named in this wait seen inside
+        our half is alerted at once (as in intrusion_hold, each robot its own backoff), and so is which robot is ours
+        lost. -> True when the robot arrived"""
         if not self.ensure_home_clear(inside_only=True): return False
         s = self.look()
         if not self.robot_seen(s): return False
@@ -1691,7 +1753,7 @@ class Session:
                 why.update(r=(f"robots {at} block the way back" if len(bb) > 1 else f"another robot ({at}) blocks the way back"), info=False)
                 return False
             return True
-        t0 = t_bad = self.clock(); n = 0; t_al = None; halted = self.motion_halted
+        t0 = t_bad = self.clock(); n = 0; t_al = None; halted = self.motion_halted; h = dict(named=set(), first={}); lost_sent = False
         while True:
             if self.out_of_time(): return False
             q = self.look(); now = self.clock()
@@ -1700,16 +1762,25 @@ class Session:
             if ok(q):
                 if now - t_bad >= self.clear_s: break
             else:
-                t_bad = now
-                due = (now - t0 >= (self.info_alert if why["info"] else self.fetch_wait)) if n == 0 else \
-                      (n < self.max_alerts and now - t_al >= self.realert)
-                if due:
-                    p = self.our_pos(q) or (self.us_last and (self.us_last["x"], self.us_last["y"])) or r0
-                    msg = (f"{why['r']}; our robot at ({p[0]:+.2f}, {p[1]:+.2f}), outside our half: the session waits"
-                           + (f" (reminder {n + 1}/{self.max_alerts})" if n else ""))
-                    if self.alert(msg, kind="way_back", since=t0 if n == 0 else t_al): n += 1; t_al = now; self.motion_halted = True
+                t_bad = now; self.holding = self.holding or dict(since=now, cause=why["r"]); self.holding["cause"] = why["r"]
+                p = self.our_pos(q) or (self.us_last and (self.us_last["x"], self.us_last["y"])) or r0
+                at = f"; our robot at ({p[0]:+.2f}, {p[1]:+.2f}), outside our half: the session waits"
+                ins = [] if self.no_info(q) else [v for v in self.intrusion(q) if v[3] == "inside"]
+                if q.get("us_lost") and not lost_sent:                   # which robot is ours was lost: at once
+                    since = self.ours_lost and self.ours_lost["since"]
+                    if self.alert(f"{why['r']}{at}; {self.lost_tail()}", kind="ours_lost", since=since,
+                                  force=since is not None and now - since >= self.ALERT_LASTING):
+                        lost_sent = True; n = max(n, 1); t_al = now; self.motion_halted = True
+                elif ins and self.alert_new_robots(ins, h, now, at):    # a robot new in our half: at once
+                    n = max(n, 1); t_al = now; self.motion_halted = True
+                else:
+                    due = (now - t0 >= (self.info_alert if why["info"] else self.fetch_wait)) if n == 0 else \
+                          (n < self.max_alerts and now - t_al >= self.realert)
+                    if due:
+                        msg = f"{why['r']}{at}" + (f" (reminder {n + 1}/{self.max_alerts})" if n else "")
+                        if self.alert(msg, kind="way_back", since=t0 if n == 0 else t_al, force=n > 0): n += 1; t_al = now; self.motion_halted = True
             self.sleep(0.5)
-        self.motion_halted = halted
+        self.motion_halted = halted; self.holding = None
         self.log(label, robot=[round(v, 3) for v in r0], to=list(tgt), after_fetch=after_fetch)
         st = dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30)
         if not self.motion_ok(st): return False
@@ -1802,9 +1873,10 @@ class Session:
     def hold(self, what, msg, cleared):
         """stop motion, alert (repeated while it is held back), wait until cleared(snapshot) (re-alerts), resume"""
         self.motion_halted = True; t0 = self.clock(); n = 1 if self.alert(msg, kind=what, since=t0) else 0; ta = self.clock()
+        self.holding = dict(since=t0, cause=msg)
         while not self.out_of_time():
             s = self.look()
-            if cleared(s): self.log("hold_cleared", what=what); self.motion_halted = False; return True
+            if cleared(s): self.log("hold_cleared", what=what); self.motion_halted = False; self.holding = None; return True
             if n == 0:
                 if self.alert(msg, kind=what, since=t0): n = 1; ta = self.clock()
             elif n < self.max_alerts and self.clock() - ta >= self.realert:
@@ -2161,6 +2233,9 @@ class Session:
         if held:
             summary += "; repeats not alerted: " + ", ".join(f"{v} {k[0]}" + (f" ({self.who(str(k[1]))})" if k[1] else "") for k, v in sorted(held.items(), key=str))
         if self.dead is not None: summary += f"; {self.dead_text()}"
+        if self.holding is not None:
+            h = self.holding
+            summary += f"; ended while holding since {time.strftime('%H:%M', time.localtime(h['since']))}: {h['cause']}{self.outside_note()}"
         self.log("session_end", why=self.stop_why, done=self.done, skipped=self.skipped, not_run=[s.get("n") for s in pending], alerts=len(self.alerts))
         self.alert(summary, kind="end", urgent=True)
         self.drain()
@@ -2212,8 +2287,11 @@ class SimRunner:
     """script: [dict(match="substring of the command", line=..., rc=0, dur=s, world={...}, timed_out=False, call=f)],
     consumed in order when the command matches the head; otherwise a default result: placements succeed and move
     the ball to the spot, gotos arrive, tests and series end well. A robot the step moves (a goto's point, the
-    robot of "world", a move made by "call") drives there during the step: a straight line at no more than SPEED"""
+    robot of "world", a move made by "call") drives there during the step: a straight line at no more than SPEED.
+    REACT, DECEL: a step stopped while the robot drives leaves it moving for REACT s, then braking at DECEL m/s^2
+    (ScriptedWorld.coast); DECEL None: it halts where it is"""
     SPEED = 1.0
+    REACT, DECEL = 0.0, None
     def __init__(self, clock, world, script=()):
         self.clock, self.world, self.script, self.calls, self.stops = clock, world, list(script), [], []
     def _robot(self):
@@ -2230,7 +2308,11 @@ class SimRunner:
                 self.world.set(robot=tuple(a[i] + k * (b[i] - a[i]) for i in range(2)) + tuple(b[2:]))
             if watch:
                 why = watch()
-                if why: self.stops.append((self.clock.t, why)); return why
+                if why:
+                    self.stops.append((self.clock.t, why))
+                    if move and self.DECEL and self.clock.t < t0 + move[2] - 1e-9 and hasattr(self.world, "coast"):
+                        a, b, T = move; self.world.coast(((b[0] - a[0]) / T, (b[1] - a[1]) / T), self.REACT, self.DECEL)
+                    return why
         return None
     def run(self, argv, env, timeout, tee=None, watch=None):
         cmd = " ".join(argv); self.calls.append(dict(cmd=cmd, env=env, timeout=timeout, watched=watch is not None)); t0 = self.clock()
@@ -2386,7 +2468,8 @@ def main():
     home = opt("--home", None); park = opt("--park", None)
     our_id = opt("--our-id", os.environ.get("SOLO_OUR_ID") or None); hk["fetch_limit"] = float(opt("--fetch-limit", "1.0"))
     hk.update(info_alert=float(opt("--info-alert", "10")), alert_dead=float(opt("--alert-dead", "300")), switch_after=float(opt("--switch-after", "20")),
-              switch_cooldown=float(opt("--switch-cooldown", "60")), max_switches=int(opt("--max-switches", "4")))
+              switch_cooldown=float(opt("--switch-cooldown", "60")), max_switches=int(opt("--max-switches", "4")),
+              settle=float(opt("--settle", "1.5")), max_speed=float(opt("--max-speed", "2.0")))
     vg, _, vp = opt("--vision", f"{VISION_GROUP}:{VISION_PORT}").rpartition(":"); viface = opt("--vision-iface", os.environ.get("SOLO_IFACE", "0.0.0.0"))
     vmirror = "--vision-mirror" in args; args = [a for a in args if a != "--vision-mirror"]
     ncam = opt("--cameras", os.environ.get("SOLO_CAMERAS") or None); cam_ids = opt("--camera-ids", os.environ.get("SOLO_CAMERA_IDS") or None)
