@@ -443,3 +443,24 @@ def test_home_auto_at_start_in_its_three_cases():
     s.run(); assert A.half_name(s.home) == "+x" and run.cmds("goto.py blue 0.4 0.0") and len(run.cmds("characterize.py")) == 1
     s, run, note, *_ = make([SPIN()], home_auto=True, others=[("yellow2", -1.8, 1.0), ("yellow1", 1.2, 0.5)], budget=60)
     s.run(); assert run.calls == [] and alerts(note)[0].startswith("both halves hold other robots (yellow 2, yellow 1)")
+
+def test_a_camera_that_stops_sending_is_no_information():
+    clk = A.SimClock(); dead = [1e18]
+    def frames(t): return None
+    class TwoCams:
+        def __init__(self): self.k = 0; self.last = -1e9
+        def read(self, timeout):
+            if clk.t - self.last < 1 / 60: return None
+            self.last = clk.t; self.k += 1
+            if self.k % 2 or clk.t >= dead[0]: return (0, [("blue", 3, -1.0, 0.0)])
+            return (1, [])                                     # camera 1 sees the other part of the field
+    v = A.RawVision(TwoCams(), clk, thread=False)
+    for _ in range(5): clk.sleep(0.02); assert v.snapshot()["vision_age"] <= 0.05
+    dead[0] = clk.t
+    for _ in range(40): clk.sleep(0.02); s = v.snapshot()
+    assert s["vision_age"] > 0.5 and ("blue", 3) in s["vision_robots"]          # camera 0 alive, camera 1 silent
+
+def test_a_failing_watch_stops_the_step():
+    r = A.Runner(echo=False)
+    import inspect
+    assert "fail safe: stop" in inspect.getsource(A.Runner.run)

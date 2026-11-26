@@ -491,6 +491,10 @@ VISION_FRESH = 0.5                  # the raw view and our robot's position: old
 PAGE_FRESH = 1.0                    # the field page's /state: older = no information
 MATCH_D = 0.25                      # the page's robot and ours in the raw vision: farther apart = not the same robot
 
+def frame_camera(w):
+    """the camera id of a detection frame"""
+    return int(w.detection.camera_id)
+
 def frame_robots(w, mirror=False):
     """a parsed SSL_WrapperPacket -> [(colour, vision id, x, y)] of its detection frame (metres; y flipped when the
     connector runs with mirror:=true), None for a packet without a detection frame"""
@@ -520,15 +524,18 @@ class McastSource:
         w = self.pb.SSL_WrapperPacket()
         try: w.ParseFromString(self.s.recv(65535))
         except Exception: return None
-        return frame_robots(w, self.mirror)
+        rs = frame_robots(w, self.mirror)
+        return None if rs is None else (frame_camera(w), rs)
 
 class RawVision:
     """the supervisor's own view of the robots: every robot of both colours with its vision id, from the packets of a
     source (McastSource, or a fake in tests), independent of the vision connector. vision_age: the age of the last
     detection frame of any camera (none = no information); vision_robots: {(colour, id): (x, y, age)} seen within
-    `keep` s. thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
+    `keep` s. Every camera that has sent a frame counts: vision_age is the age of the stalest one, so a camera that
+    stops sending is no information (not clear). A source yields (camera id, robots) or robots (camera 0).
+    thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
     def __init__(self, source, clock=time.time, keep=VISION_FRESH, thread=True):
-        self.src, self.clock, self.keep = source, clock, keep; self.L = threading.Lock(); self.frame_t = -1e9; self.seen = {}
+        self.src, self.clock, self.keep = source, clock, keep; self.L = threading.Lock(); self.cam_t = {}; self.seen = {}
         self.halt = threading.Event(); self.threaded = thread
         if thread: threading.Thread(target=self._loop, daemon=True).start()
     def _loop(self):
@@ -537,9 +544,10 @@ class RawVision:
             except Exception: f = None; self.halt.wait(0.2)
             if f is not None: self.feed(f)
     def feed(self, robots):
-        t = self.clock()
+        t = self.clock(); cam = 0
+        if isinstance(robots, tuple) and len(robots) == 2 and isinstance(robots[1], list): cam, robots = robots
         with self.L:
-            self.frame_t = t
+            self.cam_t[cam] = t
             for col, i, x, y in robots: self.seen[(col, int(i))] = (float(x), float(y), t)
     def snapshot(self):
         if not self.threaded:
@@ -549,7 +557,7 @@ class RawVision:
                 self.feed(f)
         t = self.clock()
         with self.L:
-            return dict(vision_age=round(t - self.frame_t, 2),
+            return dict(vision_age=round(t - min(self.cam_t.values()), 2) if self.cam_t else 1e9,
                         vision_robots={k: (x, y, round(t - tt, 2)) for k, (x, y, tt) in self.seen.items() if t - tt <= self.keep})
 
 def open_vision(group=VISION_GROUP, port=VISION_PORT, iface="0.0.0.0", mirror=False):
@@ -695,7 +703,7 @@ class Runner:
                 timed_out = True; self.stop(p); break
             if watch:
                 try: stopped = watch()
-                except Exception: stopped = None
+                except Exception as e: stopped = f"no information: the watch failed ({e!r})"     # fail safe: stop
                 if stopped: self.stop(p); break
             time.sleep(0.1)
         th.join(2.0); self.p = None
@@ -776,7 +784,7 @@ class Session:
                  robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0, switch_after=20.0, switch_cooldown=60.0, max_switches=4,
                  home_auto=False):
         self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
-        self.home_auto = home_auto; self.switches = []; self.notices = []; self.pending = None; self.current = None
+        self.home_auto = home_auto; self.half_sign = 1; self.switches = []; self.notices = []; self.pending = None; self.current = None
         self.our_id = None if our_id is None else int(our_id); self.vision_error = vision_error
         self.robot_fresh, self.info_alert, self.fetch_limit = robot_fresh, info_alert, fetch_limit; self.not_ours = None
         self.team = team; self.steps = steps; self.head = head or {}; self.vs = vs or dict(TEAM=team, T=HERE, SOLO_DATA=data_dir())
@@ -1067,7 +1075,7 @@ class Session:
         return os.path.join(self.vs.get("OUT") or os.path.join(data_dir(), "sessions"), "mirrored")
     def mirror_all(self):
         """the home area, the parking spot and every step still to run mirrored into the other half"""
-        self.home = mirror_rect(self.home); pd = self.plan_dir()
+        self.home = mirror_rect(self.home); pd = self.plan_dir(); self.half_sign = -self.half_sign
         if self.park is not None: self.park = tuple(mirror_pose(self.park))
         if self.pending is not None: self.pending[:] = [mirror_step(st, pd, self.vs) for st in self.pending]
         if self.current is not None: self.current = mirror_step(self.current, pd, self.vs)
@@ -1625,6 +1633,8 @@ class Session:
                 if not pending or not self.wait_for_ball(): break
                 continue
             pending.remove(st)
+            if self.home is not None and st.get("_half", 1) != self.half_sign:    # queued before a switch by another path
+                st = mirror_step(st, self.plan_dir(), self.vs); self.prepare([st])
             if st.get("_refused"):                      # a step mirrored into a half where it does not fit
                 self.skipped.append(st.get("n")); self.log("refused", n=st.get("n"), label=st.get("label", ""), why=st["_refused"]); continue
             self.execute(st, pending)
