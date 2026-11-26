@@ -32,7 +32,7 @@ class Kinematics(Node):
         scalar_or_list = ParameterDescriptor(dynamic_typing=True)
         self.declare_parameter('robot_radius', 0.077, scalar_or_list)
         self.declare_parameter('wheel_radius', 0.0245, scalar_or_list)
-        self.declare_parameter('max_wheel_rad_s', 40.0)
+        self.declare_parameter('max_wheel_rad_s', 80.0)
         self.declare_parameter('max_accel', 3.0)        # m/s^2
         self.declare_parameter('max_ang_accel', 40.0)   # rad/s^2
         self.declare_parameter('rate_hz', 100.0)
