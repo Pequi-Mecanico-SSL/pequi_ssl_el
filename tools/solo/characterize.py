@@ -15,7 +15,8 @@ A small test area: SOLO_BOX="x0,x1,y0,y1" (m) is the rectangle the robot's centr
 test, and a moving robot is braked early enough to stop inside it, assuming it can brake at SOLO_BRAKE m/s2 (1.5).
 SOLO_BOX may list several rectangles separated by ';' (the area is their union). SOLO_BRAKE_BOX (same format,
 default SOLO_BOX) is the area the early braking keeps a running test in, e.g. the part of the floor of one surface.
-SOLO_SETTLE (s) overrides the time the robot is held still after a step's command (1.5)."""
+SOLO_SETTLE (s) overrides the time the robot is held still after a step's command (1.5).
+SIGINT / SIGTERM: zero velocity for 0.2 s, the log saved, exit 130."""
 import json, math, sys, time
 import os
 import rclpy
@@ -55,6 +56,17 @@ wrap = lambda a: (a + math.pi) % (2 * math.pi) - math.pi
 
 def send(vx, vy, w):
     vx, vy, w = float(vx), float(vy), float(w); cmd[:] = [vx, vy, w]; m = Twist(); m.linear.x, m.linear.y, m.angular.z = vx, vy, w; pub.publish(m)
+
+def on_stop(*_):
+    """SIGINT / SIGTERM (a supervisor stopping the test, Ctrl-C): zeros, the log, exit"""
+    for _ in range(10):
+        try: send(0, 0, 0); time.sleep(0.02)
+        except Exception: break
+    try: save()
+    except Exception: pass
+    os._exit(130)
+import signal
+signal.signal(signal.SIGINT, on_stop); signal.signal(signal.SIGTERM, on_stop)
 
 def tick(dt=0.02):
     rclpy.spin_once(n, timeout_sec=dt)

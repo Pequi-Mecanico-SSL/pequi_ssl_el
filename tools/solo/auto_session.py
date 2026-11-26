@@ -158,6 +158,88 @@ def placer_can(b, target):
 def rects(spec):
     return [[float(v) for v in r.split(",")] for r in spec.split(";") if r.strip()] if spec else []
 
+# ------------------------------------------------------------------ the home area (tests confined to part of a shared field)
+CHAR_AREA = [-2.0, 2.0, -1.35, 1.35]                    # characterize.py's area without SOLO_BOX
+PLACER_AREA = [-FX - PLACER_MARGIN, FX + PLACER_MARGIN, -FY - PLACER_MARGIN, FY + PLACER_MARGIN]
+PLACER_LIM = min(PLACER_MARGIN, WALL - ROBOT_R - 0.03)  # how far past the lines the placer lets the robot's centre go
+
+def home_rect(spec):
+    """"x0,x1,y0,y1" -> [x0, x1, y0, y1]; None / "" = the whole field (no home checks)"""
+    if not spec: return None
+    r = [float(v) for v in spec.split(",")]
+    if len(r) != 4 or r[0] >= r[1] or r[2] >= r[3]: raise ValueError(f"home area {spec!r}: want x0,x1,y0,y1 with x0 < x1, y0 < y1")
+    return r
+
+def in_rect(p, r, pad=0.0):
+    return p is not None and r[0] - pad <= p[0] <= r[1] + pad and r[2] - pad <= p[1] <= r[3] + pad
+
+def rect_in(r, home, tol=0.005):
+    return r[0] >= home[0] - tol and r[1] <= home[1] + tol and r[2] >= home[2] - tol and r[3] <= home[3] + tol
+
+def into(r, p, d=0.3):
+    """the nearest point to p at least d inside the rectangle r"""
+    return (round(clip(p[0], r[0] + d, r[1] - d), 2), round(clip(p[1], r[2] + d, r[3] - d), 2))
+
+def rect_dist(p, r):
+    return math.hypot(max(r[0] - p[0], 0.0, p[0] - r[1]), max(r[2] - p[1], 0.0, p[1] - r[3]))
+
+def open_edges(home):
+    """the edges of the home area that lie inside the field (more than 0.3 m from the lines): the side other teams use"""
+    return dict(x0=home[0] > -FX + 0.3, x1=home[1] < FX - 0.3, y0=home[2] > -FY + 0.3, y1=home[3] < FY - 0.3)
+
+def ball_area(home):
+    """where a ball counts as ours: the home area, its edges along the field's boundary moved out to the walls"""
+    e = open_edges(home); wx, wy = FX + WALL, FY + WALL
+    return [home[0] if e["x0"] else -wx, home[1] if e["x1"] else wx, home[2] if e["y0"] else -wy, home[3] if e["y1"] else wy]
+
+def robot_area(home):
+    """where our robot's centre may be: the home area, its edges along the field's boundary moved out to the placer's
+    limit beyond the lines (a wall is not another team's side)"""
+    e = open_edges(home); lx, ly = FX + PLACER_LIM, FY + PLACER_LIM
+    return [home[0] if e["x0"] else min(home[0], -lx), home[1] if e["x1"] else max(home[1], lx),
+            home[2] if e["y0"] else min(home[2], -ly), home[3] if e["y1"] else max(home[3], ly)]
+
+def clip_rects(spec, area):
+    return ";".join(",".join(f"{v:.2f}" for v in (max(r[0], area[0]), min(r[1], area[1]), max(r[2], area[2]), min(r[3], area[3]))) for r in rects(spec))
+
+def near_open_edge(p, home, guard):
+    """p is outside the home area, or within `guard` of one of its open edges"""
+    if not in_rect(p, home): return True
+    e = open_edges(home)
+    return ((e["x0"] and p[0] < home[0] + guard) or (e["x1"] and p[0] > home[1] - guard) or
+            (e["y0"] and p[1] < home[2] + guard) or (e["y1"] and p[1] > home[3] - guard))
+
+def path_box(pts, pad=0.35):
+    """a SOLO_BOX spec around the points, inside the placer's own area"""
+    lx, ly = FX + PLACER_LIM, FY + PLACER_LIM
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    r = (max(-lx, min(xs) - pad), min(lx, max(xs) + pad), max(-ly, min(ys) - pad), min(ly, max(ys) + pad))
+    return ",".join(f"{v:.2f}" for v in r)
+
+def blockers(others, segs, d):
+    """[(name, x, y, distance)] of the other robots within d of any of the segments [((x0, y0), (x1, y1))]"""
+    out = []
+    for name, x, y in others or ():
+        m = min(_seg(x, y, a[0], a[1], b[0], b[1]) for a, b in segs)
+        if m < d: out.append((name, round(x, 2), round(y, 2), round(m, 2)))
+    return out
+
+def intruders(others, home):
+    return [(name, round(x, 2), round(y, 2)) for name, x, y in others or () if in_rect((x, y), home)]
+
+def with_params(argv, params):
+    """the node's command line with `-p name:=value` replaced (or added after --ros-args) for each of params"""
+    a = list(argv)
+    for k, v in params.items():
+        v = str(v).lower() if isinstance(v, bool) else str(v); done = False
+        for i in range(len(a) - 1):
+            if a[i] in ("-p", "--param") and a[i + 1].split(":=", 1)[0] == k:
+                a[i + 1] = f"{k}:={v}"; done = True
+        if not done:
+            if "--ros-args" not in a: a.append("--ros-args")
+            a += ["-p", f"{k}:={v}"]
+    return a
+
 def widen(spec, d=0.15):
     """a SOLO_BOX spec d wider on every side, kept 0.12 m off the walls"""
     lx, ly = FX + WALL - 0.12, FY + WALL - 0.12
@@ -220,13 +302,19 @@ class Strategy:
                 time.sleep(0.1)
         if self.child: self.child.poll()
         return not self.running()
-    def on(self):
-        """start the node from the saved line, only when procs.check_node_cmd accepts it; else self.why says why"""
+    def on(self, params=None):
+        """start the node from the saved line, only when procs.check_node_cmd accepts it; else self.why says why.
+        params {name: value} replace or add its `-p name:=value` (a running node is restarted with them); the changed
+        line becomes the saved line when the node is next switched off"""
         self.why = ""
-        if self.running(): return True
+        if self.running():
+            if not params: return True
+            self.off()
         try:
             with open(self.cmdf) as f: argv = json.load(f)
         except (OSError, ValueError) as e: self.why = f"no saved command line ({type(e).__name__})"; return False
+        if params: argv = with_params(argv, params)
+        self.last_argv = argv
         why = solo_procs.check_node_cmd(argv)
         if why: self.why = "saved command line refused: " + why; return False
         try:
@@ -243,10 +331,12 @@ class Strategy:
 class PageWorld:
     """robot and ball from the field page's /state, polled in the background (4 Hz); ages kept here. A plain /state
     read (without ?page=1) does not refresh the page's dead man's switch: only the browser page keeps a target alive"""
-    def __init__(self, url, clock=time.time):
+    def __init__(self, url, clock=time.time, period=0.1):
         self.url = url.rstrip("/") + "/state"; self.clock = clock; self.L = threading.Lock()
         self.robot = None; self.robot_t = -1e9; self.ball = None; self.ball_t = -1e9; self.page_t = -1e9
-        self.hist = deque(maxlen=40); self.strategy = None; self.page_driving = False; self.halt = threading.Event()
+        self.hist = deque(maxlen=60); self.strategy = None; self.page_driving = False; self.halt = threading.Event()
+        self.others = []; self.others_t = -1e9
+        self.period = period                # 10 polls a second: the other robots are watched during every motion step
         self.thread = threading.Thread(target=self._loop, daemon=True); self.thread.start()
     def stop(self, wait=2.0):
         """end the polling thread"""
@@ -263,23 +353,26 @@ class PageWorld:
                         self.robot = tuple(d["us"]); self.robot_t = t - float(d["us_age"])
                     if d.get("ball") is not None:
                         self.ball = tuple(d["ball"]); self.ball_t = t; self.hist.append((t, *self.ball))
+                    if isinstance(d.get("others"), dict):        # robots seen within the last second (hq.py)
+                        self.others = [(k, float(v[0]), float(v[1])) for k, v in d["others"].items()]; self.others_t = t
             except Exception:
                 pass
-            self.halt.wait(0.25)
+            self.halt.wait(self.period)
     def snapshot(self):
         t = self.clock()
         with self.L:
             h = [p for p in self.hist if t - p[0] < 1.5]
             still = len(h) >= 4 and h[-1][0] - h[0][0] > 1.0 and max(math.hypot(p[1] - h[-1][1], p[2] - h[-1][2]) for p in h) < 0.02
             return dict(robot=self.robot, robot_age=round(t - self.robot_t, 2), ball=self.ball, ball_age=round(t - self.ball_t, 2),
-                        ball_still=still, page_age=round(t - self.page_t, 2), page_driving=self.page_driving)
+                        ball_still=still, page_age=round(t - self.page_t, 2), page_driving=self.page_driving,
+                        others=list(self.others) if t - self.others_t < 1.0 else [])
 
 
 class ScriptedWorld:
     """for tests: robot and ball set by hand or by a timeline [(t, {"robot": .., "ball": ..})] on a simulated clock;
     None hides an object (its age then grows)"""
-    def __init__(self, clock, robot=(0.0, 0.6, 0.0), ball=(1.2, -0.8), timeline=()):
-        self.clock = clock; self.robot = robot; self.ball = ball; self.robot_t = self.ball_t = clock()
+    def __init__(self, clock, robot=(0.0, 0.6, 0.0), ball=(1.2, -0.8), timeline=(), others=()):
+        self.clock = clock; self.robot = robot; self.ball = ball; self.robot_t = self.ball_t = clock(); self.others = list(others)
         self.robot_on = robot is not None; self.ball_on = ball is not None; self.timeline = sorted(timeline, key=lambda e: e[0])
     def set(self, **kw):
         t = self.clock()
@@ -289,13 +382,14 @@ class ScriptedWorld:
         if "ball" in kw:
             self.ball_on = kw["ball"] is not None
             if self.ball_on: self.ball = tuple(kw["ball"]); self.ball_t = t
+        if "others" in kw: self.others = list(kw["others"])          # [(name, x, y)], e.g. ("yellow2", 0.4, 0.3)
     def snapshot(self):
         while self.timeline and self.timeline[0][0] <= self.clock(): self.set(**self.timeline.pop(0)[1])
         t = self.clock()
         if self.robot_on: self.robot_t = t
         if self.ball_on: self.ball_t = t
         return dict(robot=self.robot, robot_age=round(t - self.robot_t, 2), ball=self.ball, ball_age=round(t - self.ball_t, 2),
-                    ball_still=self.ball_on, page_age=0.0)
+                    ball_still=self.ball_on, page_age=0.0, others=list(self.others))
 
 
 # ------------------------------------------------------------------ running a step
@@ -314,8 +408,10 @@ class Runner:
     """each step a subprocess in its own process group with a hard time limit"""
     def __init__(self, echo=True):
         self.echo = echo; self.p = None; self.kill_now = False
-    def run(self, argv, env, timeout, tee=None):
-        t0 = time.time(); lines = []; self.kill_now = False
+    def run(self, argv, env, timeout, tee=None, watch=None):
+        """watch: called every 0.1 s while the step runs; a non-empty string it returns stops the step at once (the
+        same stop as the time limit) and is returned as 'stopped'"""
+        t0 = time.time(); lines = []; self.kill_now = False; stopped = None
         try:
             p = self.p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                           text=True, bufsize=1, start_new_session=True)
@@ -330,6 +426,10 @@ class Runner:
         while p.poll() is None:
             if time.time() - t0 > timeout or self.kill_now:
                 timed_out = True; self.stop(p); break
+            if watch:
+                try: stopped = watch()
+                except Exception: stopped = None
+                if stopped: self.stop(p); break
             time.sleep(0.1)
         th.join(2.0); self.p = None
         if tee:
@@ -337,7 +437,8 @@ class Runner:
                 with open(tee, "a") as f: f.write("\n".join(lines) + "\n")
             except OSError: pass
         data, line = result_of(lines)
-        return dict(rc=p.returncode, timed_out=timed_out, line=line, data=data, t0=t0, t1=time.time(), tail=lines[-5:])
+        if stopped: line = f"stopped by the supervisor: {stopped}"
+        return dict(rc=p.returncode, timed_out=timed_out, line=line, data=data, t0=t0, t1=time.time(), tail=lines[-5:], stopped=stopped)
     def stop(self, p):
         """the step's process group: SIGINT, 1.5 s to end; SIGTERM, 1.5 s; then SIGKILL. place_ball.py sends zeros for
         0.3 s on SIGINT and on SIGTERM; after SIGKILL nothing is sent, and the robot's own command timeout stops it.
@@ -396,7 +497,9 @@ def expand(v, vs):
 class Session:
     def __init__(self, team, steps, head=None, vs=None, world=None, runner=None, notifier=None, procs=None, strategy=None,
                  log_path=None, events_path=None, budget_s=600.0, clock=time.time, sleep=time.sleep, python="python3",
-                 ball_lost=5.0, robot_lost=2.0, robot_wait=10.0, busy_wait=20.0, realert=180.0, max_alerts=3, echo=True):
+                 ball_lost=5.0, robot_lost=2.0, robot_wait=10.0, busy_wait=20.0, realert=180.0, max_alerts=3, echo=True,
+                 home=None, no_ball=None, corridor=0.7, fetch_wait=60.0, fetch_tries=3, park=None, intrude_dist=1.0,
+                 clear_s=5.0, hold_limit=120.0, ball_hold=30.0, ball_guard=0.6, edge_guard=0.9):
         self.team = team; self.steps = steps; self.head = head or {}; self.vs = vs or dict(TEAM=team, T=HERE, SOLO_DATA=data_dir())
         self.world = world; self.runner = runner; self.notifier = notifier; self.procs = procs; self.strat = strategy
         self.clock, self.sleep = clock, sleep; self.py = python; self.echo = echo
@@ -407,6 +510,13 @@ class Session:
         self.stop_req = 0; self.stop_why = None; self.motion_halted = False
         self.ball_incident = None; self.skipped_groups = set(); self.alerts = []; self.done = []; self.skipped = []
         self.retried_place = set(); self.bad_ball = None    # where the placer said "unreachable: ball"
+        self.home = home_rect(home) if isinstance(home, str) else home
+        self.no_ball = bool(no_ball if no_ball is not None else self.head.get("ball") == "ignore")
+        self.corridor, self.fetch_wait, self.fetch_tries, self.intrude_dist = corridor, fetch_wait, fetch_tries, intrude_dist
+        self.clear_s, self.hold_limit, self.ball_hold, self.ball_guard, self.edge_guard = clear_s, hold_limit, ball_hold, ball_guard, edge_guard
+        self.park = tuple(park) if park else (tuple(self.head["park"]) if self.head.get("park") else (into(self.home, (-1.0, -1.0)) if self.home else None))
+        self.fetch_inc = None; self.intrusions = []
+        self.prepare()
 
     # ---- records
     def log(self, kind, **kw):
@@ -451,13 +561,173 @@ class Session:
             self.sleep(0.25); s = self.look()
         return s
 
+
+    # ---- the home area: load-time checks
+    def step_boxes(self, st):
+        """-> (list of rectangles the step's robot centre may use, None) or (None, why it cannot be told)"""
+        k = st["kind"]; env = self.env_for(st); box = rects(env.get("SOLO_BOX", ""))
+        if k == "place": return box or [PLACER_AREA], None
+        if k == "test":
+            if st.get("test") == "goto" and len(st.get("args", [])) >= 2: return [[st["args"][0], st["args"][0], st["args"][1], st["args"][1]]], None
+            return box or [CHAR_AREA], None
+        if k == "goto": return [[st["x"], st["x"], st["y"], st["y"]]], None
+        if k == "series":
+            path = expand(st["plan"], self.vs); out = []
+            try: lines = [json.loads(l) for l in open(path) if l.strip() and not l.lstrip().startswith("#")]
+            except (OSError, ValueError) as e: return None, f"plan {path} cannot be read ({e.__class__.__name__})"
+            first = int(st.get("from") or 1); last = first - 1 + int(st["max"]) if st.get("max") else len(lines)
+            for e in lines[first - 1:last]: out += rects(e.get("box", "")) or box or [CHAR_AREA]
+            return out, None
+        return None, None
+    def prepare(self):
+        """mark the steps the session refuses (st["_refused"]) and keep every motion step's area (st["_boxes"])"""
+        for st in self.steps:
+            why = None
+            if self.no_ball and (st["kind"] == "place" or st.get("needs_ball") or st.get("park")):
+                why = "a ball step in a session without the ball"
+            if st["kind"] in MOTION and not why:
+                bx, err = self.step_boxes(st); st["_boxes"] = bx
+                if self.home is not None:
+                    if st["kind"] == "strategy" and st.get("on", True) and not st.get("side"):
+                        why = "a strategy step without its side (\"side\": \"negative\" or \"positive\") in a home area"
+                    elif err: why = err
+                    elif bx:
+                        bad = [r for r in bx if not rect_in(r, robot_area(self.home))]
+                        if bad: why = f"its area {','.join(f'{v:g}' for v in bad[0])} is not inside the home area {','.join(f'{v:g}' for v in self.home)}"
+            if why: st["_refused"] = why
+
+    # ---- the home area: other robots
+    def intrusion(self, s):
+        """[(name, x, y, 'inside' | distance)] of the other robots inside the home area or within intrude_dist of ours"""
+        if self.home is None: return []
+        rb = s.get("robot") if s.get("robot") is not None and s.get("robot_age", 9) <= self.robot_lost else None; out = []
+        for name, x, y in s.get("others") or ():
+            if in_rect((x, y), self.home): out.append((name, round(x, 2), round(y, 2), "inside"))
+            elif rb is not None and math.hypot(x - rb[0], y - rb[1]) < self.intrude_dist:
+                out.append((name, round(x, 2), round(y, 2), round(math.hypot(x - rb[0], y - rb[1]), 2)))
+        return out
+    def ball_near_in_box(self, s, st):
+        """no-ball sessions: a ball inside the step's area and within ball_guard of our robot"""
+        b = s["ball"] if s.get("ball") is not None and s.get("ball_age", 9) < 1.0 else None
+        boxes = rects(st["keep_ball_out"]) if st.get("keep_ball_out") else (st.get("_boxes") or [])
+        if b is None or s.get("robot") is None or not any(in_rect(b, r, 0.15) for r in boxes): return False
+        return math.hypot(b[0] - s["robot"][0], b[1] - s["robot"][1]) < self.ball_guard
+    def watch_for(self, st, extra=None):
+        """the check run 10 times a second while a motion step runs"""
+        if self.home is None and not self.no_ball and extra is None: return None
+        def watch():
+            s = self.world.snapshot()
+            w = self.intrusion(s)
+            if w: self.last_intrusion = (w, s.get("robot")); return "another robot: " + ", ".join(f"{n} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in w)
+            if self.no_ball and self.ball_near_in_box(s, st): return f"a ball in the test area at ({s['ball'][0]:+.2f}, {s['ball'][1]:+.2f})"
+            return extra(s) if extra else None
+        return watch
+    @staticmethod
+    def who(name):
+        m = re.match(r"([a-z]+)(\d+)$", name); return f"{m.group(1)} {m.group(2)}" if m else name
+    def intrusion_hold(self, w, robot, during):
+        """hold all motion until no other robot has been inside the home area (or near ours) for clear_s; one alert, one
+        more after every hold_limit s (at most max_alerts)"""
+        name, x, y, how = w[0]; rb = f"({robot[0]:+.2f}, {robot[1]:+.2f})" if robot else "(not seen)"
+        what = "entered our half" if how == "inside" else f"came within {how:.2f} m of our robot"
+        msg = (f"another robot ({self.who(name)}) {what} at ({x:+.2f}, {y:+.2f}); our robot " + ("stopped" if during else "waits") + f" at {rb}")
+        inc = dict(since=round(self.clock(), 3), robots=w, robot=robot and [round(v, 3) for v in robot[:2]], during=during)
+        self.intrusions.append(inc); self.log("intrusion", **inc)
+        self.alert(msg); n = 1; t_alert = self.clock(); t_seen = self.clock(); self.motion_halted = True
+        while not self.out_of_time():
+            s = self.look(); now = self.clock()
+            if self.intrusion(s): t_seen = now
+            elif now - t_seen >= self.clear_s:
+                self.motion_halted = False; self.log("intrusion_clear", held=round(now - inc["since"], 1)); return True
+            if now - t_alert >= self.hold_limit and n < self.max_alerts:
+                n += 1; t_alert = now; ww = self.intrusion(s) or w
+                self.alert(f"another robot ({self.who(ww[0][0])}) still in our half at ({ww[0][1]:+.2f}, {ww[0][2]:+.2f}) after {now - inc['since']:.0f} s: the session keeps holding (reminder {n}/{self.max_alerts})")
+            self.sleep(0.2)
+        self.motion_halted = False
+        return False
+    def ensure_home_clear(self):
+        s = self.look(); w = self.intrusion(s)
+        return True if not w else self.intrusion_hold(w, s.get("robot"), during=False)
+
+    # ---- the home area: the ball and our robot outside it
+    def in_home(self, p):
+        """for the ball: inside the home area or between it and the walls on our side"""
+        return self.home is None or in_rect(p, ball_area(self.home))
+    def fetch(self, s, wait=None):
+        """bring a ball resting outside the home area back to the parking spot, only through a clear corridor; -> True
+        when the ball is back inside"""
+        wait = self.fetch_wait if wait is None else wait
+        if self.fetch_inc is None: self.fetch_inc = dict(since=self.clock(), tries=0, alerts=0)
+        inc = self.fetch_inc; t0 = self.clock()
+        while True:
+            if not (self.robot_seen(s) and s["ball"] is not None): return False
+            b, r = s["ball"][:2], s["robot"][:2]; segs = [(r, b), (b, self.park)]
+            bl = blockers(s.get("others"), segs, self.corridor) + [w for w in self.intrusion(s) if w[3] != "inside" and w[0] not in [q[0] for q in blockers(s.get("others"), segs, self.corridor)]]
+            if not bl: break
+            if self.clock() - t0 >= wait or self.out_of_time():
+                if inc["alerts"] == 0 and self.clock() - inc["since"] >= self.fetch_wait:
+                    inc["alerts"] = 1; inc["t_alert"] = self.clock()
+                    near = ", ".join(f"{self.who(n)} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in bl[:3])
+                    self.log("fetch_blocked", ball=[round(v, 3) for v in b], robots=bl)
+                    self.alert(f"ball at ({b[0]:+.2f}, {b[1]:+.2f}) in the other half, other robots near it ({near}): fetch it when you can")
+                return False
+            self.sleep(1.0); s = self.look()
+        if inc["tries"] >= self.fetch_tries:
+            if inc["alerts"] == 0:
+                inc["alerts"] = 1; inc["t_alert"] = self.clock()
+                self.alert(f"ball at ({b[0]:+.2f}, {b[1]:+.2f}) in the other half: {inc['tries']} fetches were stopped: fetch it when you can")
+            return False
+        inc["tries"] += 1; park = self.park
+        st = dict(kind="place", x=park[0], y=park[1], label="fetch the ball", n=0, env={"SOLO_BOX": path_box([r, b, park])})
+        self.log("fetch", ball=[round(v, 3) for v in b], robot=[round(v, 3) for v in r], park=list(park), box=st["env"]["SOLO_BOX"], attempt=inc["tries"])
+        def corridor(q):
+            if q.get("robot") is None or q.get("ball") is None: return None
+            bb = blockers(q.get("others"), [(q["robot"][:2], q["ball"][:2]), (q["ball"][:2], park)], self.corridor)
+            return ("a robot in the corridor: " + ", ".join(f"{n} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in bb)) if bb else None
+        res = self.run_step(st, watch=self.fetch_watch(corridor))
+        q = self.wait_ball_rest(self.look())
+        if res.get("stopped"):
+            self.log("fetch_stopped", why=res["stopped"]); self.retreat(q)
+            return False
+        self.after(st, res, home=False); self.after_home(self.look(), fetched=True)
+        q = self.look()
+        if q["ball"] is not None and self.in_home(q["ball"]):
+            self.log("fetch_done", ball=[round(v, 3) for v in q["ball"]]); self.fetch_inc = None; return True
+        return False
+    def fetch_watch(self, corridor):
+        """during a fetch: robots near ours count, a robot inside the home area does not stop it (the corridor does)"""
+        def watch():
+            s = self.world.snapshot()
+            near = [w for w in self.intrusion(s) if w[3] != "inside"]
+            if near: return "another robot near ours: " + ", ".join(f"{n} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in near)
+            return corridor(s)
+        return watch
+    def retreat(self, s):
+        """after a stopped fetch: back into the home area by a goto (goto.py goes round the other team's robots)"""
+        if not self.robot_seen(s) or in_rect(s["robot"], robot_area(self.home), 0.05): return True
+        tgt = into(self.home, s["robot"]); self.log("retreat", robot=[round(v, 3) for v in s["robot"][:2]], to=list(tgt))
+        r = self.run_step(dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30))
+        return r.get("ok")
+    def after_home(self, s, fetched=False):
+        """the robot outside the home area between steps: drive it back inside first (corridor checked)"""
+        if self.home is None or not self.robot_seen(s) or in_rect(s["robot"], robot_area(self.home), 0.05): return True
+        r0 = s["robot"][:2]; tgt = into(self.home, r0); t0 = self.clock()
+        while blockers(s.get("others"), [(r0, tgt)], self.corridor) and not self.out_of_time():
+            if self.clock() - t0 >= self.fetch_wait:
+                return self.hold("outside", f"our robot is outside our half at ({r0[0]:+.2f}, {r0[1]:+.2f}) and other robots block its way back: the session waits",
+                                 lambda q: not blockers(q.get("others"), [(r0, tgt)], self.corridor))
+            self.sleep(1.0); s = self.look()
+        self.log("return_home", robot=[round(v, 3) for v in r0], to=list(tgt), after_fetch=fetched)
+        r = self.run_step(dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30))
+        return r.get("ok")
+
     # ---- the ball
     def at_bad(self, s):
         return self.bad_ball is not None and s["ball"] is not None and math.hypot(s["ball"][0] - self.bad_ball[0], s["ball"][1] - self.bad_ball[1]) < 0.05
     def ball_ready(self, s):
-        return s["ball_class"] in PLACEABLE and not self.at_bad(s)
+        return s["ball_class"] in PLACEABLE and not self.at_bad(s) and self.in_home(s["ball"])
     def ball_back(self, s):
-        return s["ball_class"] in IN_FIELD and s["ball_still"] and not self.at_bad(s)
+        return s["ball_class"] in IN_FIELD and s["ball_still"] and not self.at_bad(s) and self.in_home(s["ball"])
     def ball_problem(self, s):
         """the ball cannot be used: try one placement toward the field if the placer can, else alert once"""
         s = self.wait_ball_rest(s)
@@ -465,10 +735,23 @@ class Session:
             if self.ball_incident: self.log("ball_back", where=s["ball_where"]); self.ball_incident = None
             self.bad_ball = None
             return True
+        if self.home is not None and s["ball_class"] in PLACEABLE and not self.at_bad(s) and not self.in_home(s["ball"]):
+            if not self.motion_halted and self.fetch(s): return True
+            return False                                        # the fetch alerts once when the corridor stays blocked
         if self.ball_incident is None:
             self.ball_incident = dict(cls=s["ball_class"], since=self.clock(), alerts=0, tried=self.at_bad(s))
             self.log("ball_unusable", cls=s["ball_class"], where=s["ball_where"])
         inc = self.ball_incident
+        if self.home is not None and s["ball"] is not None and not in_rect(s["ball"], self.home, PLACER_MARGIN + 0.05):
+            inc["tried"] = True                                  # not in our half: no rescue across the field, a person
+        if self.home is not None and not inc["tried"] and s["ball"] is not None:
+            inc["tried"] = True; tgt = into(self.home, s["ball"]); can = placer_can(s["ball"], tgt)
+            self.log("ball_rescue", target=tgt, placer_can=can)
+            if can and not self.busy_now() and self.robot_seen(s) and not self.motion_halted:
+                st = dict(kind="place", x=tgt[0], y=tgt[1], label="ball rescue", n=0, env={"SOLO_BOX": path_box([s["robot"][:2], s["ball"], tgt])})
+                r = self.run_step(st, watch=self.watch_for(st)); self.after(st, r)
+                s = self.wait_ball_rest(self.look())
+                if self.ball_ready(s): self.log("ball_back", where=s["ball_where"]); self.ball_incident = None; return True
         if not inc["tried"] and s["ball_class"] != "lost" and not self.motion_halted and self.robot_seen(s):
             inc["tried"] = True
             tgt = reach_point(s["ball"]); can = placer_can(s["ball"], tgt)
@@ -496,7 +779,13 @@ class Session:
         self.log("waiting", for_="ball")
         while not self.out_of_time():
             s = self.look()
-            if self.ball_back(s): self.log("ball_back", where=s["ball_where"]); self.ball_incident = None; self.bad_ball = None; return True
+            if self.ball_back(s): self.log("ball_back", where=s["ball_where"]); self.ball_incident = None; self.bad_ball = None; self.fetch_inc = None; return True
+            if self.home is not None and s["ball_class"] in PLACEABLE and s["ball"] is not None and not self.in_home(s["ball"]) and not self.motion_halted:
+                if self.fetch(s, wait=0): continue
+                fi = self.fetch_inc
+                if fi and 0 < fi["alerts"] < self.max_alerts and self.clock() - fi.get("t_alert", 0) >= self.realert:
+                    fi["alerts"] += 1; fi["t_alert"] = self.clock()
+                    self.alert(f"ball at ({s['ball'][0]:+.2f}, {s['ball'][1]:+.2f}) still in the other half: fetch it when you can (reminder {fi['alerts']}/{self.max_alerts})")
             inc = self.ball_incident
             if inc and inc["alerts"] < self.max_alerts and self.clock() - inc.get("t_alert", 0) >= self.realert: self.ball_alert(s)
             self.sleep(1.0)
@@ -581,7 +870,9 @@ class Session:
         env = dict(os.environ)
         for src in (self.head.get("env", {}), st.get("env", {})):
             for k, v in expand(src, self.vs).items(): env[k] = str(v)
-        if retry: env["SOLO_BOX"] = widen(env.get("SOLO_BOX", ""))
+        if retry:
+            env["SOLO_BOX"] = widen(env.get("SOLO_BOX", ""))
+            if self.home is not None and st.get("label") != "fetch the ball": env["SOLO_BOX"] = clip_rects(env["SOLO_BOX"], robot_area(self.home))
         return env
     def timeout_of(self, st):
         if "timeout" in st: return float(st["timeout"])
@@ -590,8 +881,8 @@ class Session:
             o = st.get("opts", []); return (float(o[o.index("--timeout") + 1]) if "--timeout" in o else 60.0) + 20.0
         return float(TIMEOUTS.get(st["kind"], 60))
 
-    def run_step(self, st, retry=False):
-        """run one step; -> outcome dict(ok, line, data, rc, timed_out, stuck)"""
+    def run_step(self, st, retry=False, watch=None):
+        """run one step; -> outcome dict(ok, line, data, rc, timed_out, stuck, stopped)"""
         k = st["kind"]; t0 = self.clock()
         if k == "marker":
             self.marker(expand(st["text"], self.vs), st.get("data", "")); return dict(ok=True, line="marker")
@@ -603,11 +894,12 @@ class Session:
             return self.run_strategy(st)
         argv = self.command(st, retry); env = self.env_for(st, retry)
         tee = expand(st["tee"], self.vs) if st.get("tee") else None
-        r = self.runner.run(argv, env, self.timeout_of(st), tee=tee)
-        r["ok"] = self.judge(st, r); r["stuck"] = "robot stuck" in (r.get("line") or "")
+        r = self.runner.run(argv, env, self.timeout_of(st), tee=tee, watch=watch) if watch else self.runner.run(argv, env, self.timeout_of(st), tee=tee)
+        r["ok"] = self.judge(st, r) and not r.get("stopped"); r["stuck"] = "robot stuck" in (r.get("line") or "")
         self.log("step", n=st.get("n"), label=st.get("label", ""), step_kind=k, cmd=argv,
                  env={v: env[v] for v in ("SOLO_BOX", "SOLO_RAMP", "SOLO_BRAKE") if v in env}, start=round(r.get("t0", t0), 3),
-                 end=round(r.get("t1", self.clock()), 3), rc=r.get("rc"), timed_out=r.get("timed_out"), ok=r["ok"], result=r.get("line"), retry=retry)
+                 end=round(r.get("t1", self.clock()), 3), rc=r.get("rc"), timed_out=r.get("timed_out"), ok=r["ok"], result=r.get("line"), retry=retry,
+                 **({"stopped": r["stopped"]} if r.get("stopped") else {}))
         return r
     def judge(self, st, r):
         k, d, line = st["kind"], r.get("data"), r.get("line") or ""
@@ -624,19 +916,30 @@ class Session:
         if not self.strat.can_start():
             self.log("step", n=st.get("n"), label=st.get("label", ""), step_kind="strategy", ok=False, result="no strategy command line (start it with run_real.sh, then off)")
             return dict(ok=False, line="strategy cannot start")
-        on = self.strat.on(); t_on = self.clock(); end = t_on + float(st.get("seconds", 10))
+        params = dict(st.get("params") or {})
+        if st.get("side"): params["side"] = st["side"]
+        on = self.strat.on(params) if params else self.strat.on(); t_on = self.clock(); end = t_on + float(st.get("seconds", 10))
         if not on: self.log("strategy_refused", n=st.get("n"), why=getattr(self.strat, "why", ""))
-        track = []
+        track = []; stopped = None; ended = None; t_out = None; ball_box = rects(st.get("end_ball_out", "")); guard = float(st.get("edge_guard", self.edge_guard))
         while on and self.clock() < end and self.stop_req < 2:
             s = self.world.snapshot(); track.append((round(self.clock() - t_on, 2), s["robot"] and [round(v, 3) for v in s["robot"][:2]], s["ball"] and [round(v, 3) for v in s["ball"]]))
-            self.sleep(0.5)
+            w = self.intrusion(s)
+            if w: self.last_intrusion = (w, s.get("robot")); stopped = "another robot: " + ", ".join(f"{n} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in w); break
+            if self.home is not None and s.get("robot") is not None and near_open_edge(s["robot"], self.home, guard):
+                ended = f"robot at ({s['robot'][0]:+.2f}, {s['robot'][1]:+.2f}), within {guard} m of the home area's open edge"; break
+            if ball_box and s.get("ball") is not None and not any(in_rect(s["ball"], r) for r in ball_box):
+                t_out = t_out if t_out is not None else self.clock()
+                if self.clock() - t_out >= 0.5: ended = f"ball out of {st['end_ball_out']} at {t_out - t_on:.1f} s"; break
+            self.sleep(0.1)
         off = self.strat.off()
         self.log("step", n=st.get("n"), label=st.get("label", ""), step_kind="strategy", on=True, seconds=st.get("seconds"), started=on, stopped=off,
-                 ok=on and off, start=round(t0, 3), end=round(self.clock(), 3), track=track[::2])
+                 ok=on and off and not stopped, start=round(t0, 3), end=round(self.clock(), 3), params=params, ended_early=ended,
+                 interrupted=stopped, track=track[::2])
         if not off: self.stop_why = "the strategy node did not stop"; self.alert("the strategy node did not stop: the session ends; stop it on the field page"); self.stop_req = max(self.stop_req, 1)
-        return dict(ok=on and off, line=f"strategy on {st.get('seconds')} s" + ("" if on and off else " FAILED"))
+        return dict(ok=on and off and not stopped, line=f"strategy on {st.get('seconds')} s" + ("" if on and off else " FAILED") + (f" (ended: {ended})" if ended else ""),
+                    stopped=stopped)
 
-    def after(self, st, r):
+    def after(self, st, r, home=True):
         """look at the world after a step and handle the robot; -> True when the robot can go on"""
         s = self.look(); s = self.wait_ball_rest(s) if is_motion(st) else s
         self.log("world", after=st.get("n"), robot=s["robot"] and [round(v, 3) for v in s["robot"]], robot_age=s["robot_age"],
@@ -647,6 +950,12 @@ class Session:
         failed = not r.get("ok")
         if r.get("stuck") or (failed and s["robot_clear"] < NEAR_WALL):
             return self.free_robot(s, r.get("line") or "")
+        if self.home is not None and home and not self.motion_halted:
+            self.after_home(s)                                   # our robot outside the home area: back inside first
+            q = self.look()
+            if (not self.no_ball and q["ball"] is not None and q["ball_class"] in PLACEABLE and not self.in_home(q["ball"])
+                    and q["ball_still"] and not self.at_bad(q)):
+                self.fetch(q)                                    # a ball resting in the other half: fetch it now
         return True
 
     def handle_fail(self, st, r, pending):
@@ -668,8 +977,14 @@ class Session:
         if is_motion(st):
             if self.motion_halted: self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: motion stopped"); return
             if not self.motion_ok(st): pending.insert(0, st); return
+            if self.home is not None:
+                if not self.ensure_home_clear(): pending.insert(0, st); return
+                if not self.after_home(self.look()): pending.insert(0, st); return
+            if self.no_ball and not self.foreign_ball_clear(st, pending): return
         if self.out_of_time() and not st.get("final"): pending.insert(0, st); return
-        r = self.run_step(st)
+        r = self.run_step(st, watch=self.watch_for(st)) if k != "strategy" else self.run_step(st)
+        if r.get("stopped"):
+            return self.interrupted(st, r, pending)
         if k == "place" and not r["ok"]:
             status = (r.get("data") or {}).get("status", "")
             if status.startswith("unreachable") and "spot" not in status:      # the ball's position, not the target
@@ -687,8 +1002,46 @@ class Session:
         else: self.handle_fail(st, r, pending)
         return ok_go
 
+
+    def interrupted(self, st, r, pending):
+        """a step the supervisor stopped: another robot (hold, alert, repeat the step from its start) or a foreign ball
+        near our robot in a session without the ball (quiet: the step goes to the end of the list once)"""
+        why = r["stopped"]
+        if why.startswith("another robot"):
+            st["_interrupted"] = st.get("_interrupted", 0) + 1
+            self.log("decision", n=st.get("n"), action="step interrupted: another robot", why=why, times=st["_interrupted"])
+            w, _ = getattr(self, "last_intrusion", ([("another robot", 0.0, 0.0, "inside")], None))
+            s = self.look(); self.intrusion_hold(w, s.get("robot"), during=True)
+            if st["_interrupted"] <= 5: pending.insert(0, st)
+            else: self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: interrupted 5 times")
+            self.after(st, dict(r, ok=True))
+            return True
+        self.log("foreign_ball", n=st.get("n"), action="step stopped: a ball near our robot inside the test area", why=why)
+        self.defer(st, pending); self.after(st, dict(r, ok=True))
+        return True
+    def defer(self, st, pending):
+        if not st.get("_deferred"):
+            st["_deferred"] = 1; pending.append(st); self.log("decision", n=st.get("n"), action="moved to the end of the list (a ball in its area)")
+        else:
+            self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: a ball in its area twice")
+    def foreign_ball_clear(self, st, pending):
+        """no-ball sessions: a ball within 0.15 m of the step's area -> hold up to ball_hold s (quiet), then the step goes
+        to the end of the list; the ball is never touched"""
+        boxes = rects(st["keep_ball_out"]) if st.get("keep_ball_out") else (st.get("_boxes") or [])
+        def inside(q):
+            b = q["ball"] if q.get("ball") is not None and q.get("ball_age", 9) < 1.5 else None
+            return b is not None and any(in_rect(b, r, 0.15) for r in boxes)
+        s = self.look()
+        if not boxes or not inside(s): return True
+        self.log("foreign_ball", n=st.get("n"), ball=[round(v, 3) for v in s["ball"]], action=f"a ball in the test area: waiting up to {self.ball_hold:.0f} s")
+        t0 = self.clock()
+        while self.clock() - t0 < self.ball_hold and not self.out_of_time():
+            self.sleep(0.5); s = self.look()
+            if not inside(s): self.log("foreign_ball", n=st.get("n"), action="the ball left the test area", waited=round(self.clock() - t0, 1)); return True
+        self.defer(st, pending)
+        return False
     def needs(self, st):
-        return st.get("needs_ball", st["kind"] == "place")
+        return False if self.no_ball else st.get("needs_ball", st["kind"] == "place")
     def ball_blocks(self, st, s):
         """the ball lies inside the keep_ball_out box this ball-free step must keep clear"""
         return bool(st.get("keep_ball_out")) and ball_in_box(s["ball"] if s["ball_age"] < 1.5 else None, st["keep_ball_out"])
@@ -705,6 +1058,7 @@ class Session:
         Ball steps keep their order; ball-free steps go ahead of them while the ball cannot be used."""
         for st in [p for p in pending if p.get("group") in self.skipped_groups]:
             pending.remove(st); self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: its group failed")
+        if self.no_ball: return (pending[0], None) if pending else (None, None)
         s = self.look(); ball_ok = None; blocked = None
         for st in pending:
             if self.needs(st):
@@ -726,8 +1080,11 @@ class Session:
         return None, (blocked if ball_ok is not False else None)
 
     def run(self):
-        main = [st for st in self.steps if not st.get("final")]; final = [st for st in self.steps if st.get("final")]
-        self.log("session_start", name=self.head.get("name", ""), steps=len(self.steps), budget_s=round(self.t_end - self.t_start))
+        main = [st for st in self.steps if not st.get("final") and not st.get("_refused")]; final = [st for st in self.steps if st.get("final") and not st.get("_refused")]
+        self.log("session_start", name=self.head.get("name", ""), steps=len(self.steps), budget_s=round(self.t_end - self.t_start),
+                 home=self.home, no_ball=self.no_ball, park=self.park)
+        for st in self.steps:
+            if st.get("_refused"): self.skipped.append(st.get("n")); self.log("refused", n=st.get("n"), label=st.get("label", ""), why=st["_refused"])
         pending = list(main)
         try:
             self.loop(pending)
@@ -779,12 +1136,13 @@ class SimProcs:
 
 class SimStrategy:
     def __init__(self, procs, can=True):
-        self.procs = procs; self.can = can; self.ons = 0; self.offs = 0; self.cmdf = "solo.cmd"
+        self.procs = procs; self.can = can; self.ons = 0; self.offs = 0; self.cmdf = "solo.cmd"; self.params = []; self.last_argv = None
     def running(self): return any(is_instance(a, "solo_node") for _, a in self.procs.table())
     def can_start(self): return self.can or self.running()
-    def on(self):
-        self.ons += 1
-        if not self.running(): self.procs.rows.append((999, ["python3", "/x/lib/solo_strategy/solo_node", "--ros-args"]))
+    def on(self, params=None):
+        self.ons += 1; self.params.append(dict(params or {}))
+        self.last_argv = with_params(["python3", "/x/lib/solo_strategy/solo_node", "--ros-args", "-p", "side:=positive"], params or {})
+        if not self.running(): self.procs.rows.append((999, self.last_argv))
         return True
     def off(self):
         self.offs += 1; self.procs.rows = [r for r in self.procs.rows if r[0] != 999]; return True
@@ -803,18 +1161,29 @@ class SimRunner:
     consumed in order when the command matches the head; otherwise a default result: placements succeed and move
     the ball to the spot, gotos arrive, tests and series end well"""
     def __init__(self, clock, world, script=()):
-        self.clock, self.world, self.script, self.calls = clock, world, list(script), []
-    def run(self, argv, env, timeout, tee=None):
+        self.clock, self.world, self.script, self.calls, self.stops = clock, world, list(script), [], []
+    def _pass(self, dur, watch):
+        """the step's time on the simulated clock in 0.1 s polls; -> the watch's reason when it stops the step"""
+        end = self.clock.t + dur
+        while self.clock.t < end - 1e-9:
+            self.clock.t = min(end, self.clock.t + 0.1)
+            if watch:
+                why = watch()
+                if why: self.stops.append((self.clock.t, why)); return why
+        return None
+    def run(self, argv, env, timeout, tee=None, watch=None):
         cmd = " ".join(argv); self.calls.append(dict(cmd=cmd, env=env, timeout=timeout)); t0 = self.clock()
         if self.script and self.script[0]["match"] in cmd:
             e = self.script.pop(0)
             if e.get("call"): e["call"]()
-            self.clock.t += e.get("dur", 5.0)
+            why = self._pass(e.get("dur", 5.0), watch)
+            if why: return dict(rc=-2, timed_out=False, line=f"stopped by the supervisor: {why}", data=None, t0=t0, t1=self.clock(), stopped=why)
             if "world" in e: self.world.set(**e["world"])
             line = e["line"] if isinstance(e["line"], str) else json.dumps(e["line"])
             data, line = result_of([line])
             return dict(rc=e.get("rc", 0), timed_out=e.get("timed_out", False), line=line, data=data, t0=t0, t1=self.clock())
-        self.clock.t += 5.0
+        why = self._pass(5.0, watch)
+        if why: return dict(rc=-2, timed_out=False, line=f"stopped by the supervisor: {why}", data=None, t0=t0, t1=self.clock(), stopped=why)
         if "place_ball.py" in cmd:
             x, y = float(argv[3]), float(argv[4]); self.world.set(ball=(x, y))
             line = json.dumps(dict(ok=True, status="done", ball=[x, y], error=0.02))
@@ -858,6 +1227,22 @@ DECISIONS = [
     ("a test ABORT / non-zero exit / step time limit", "on_fail: skip (and the rest of its group) / retry once / stop / alert", "only with on_fail alert or stop"),
     ("budget used / Ctrl-C", "current step ends, strategy off, final steps, end marker", "'session ended: ...'"),
 ]
+HOME_DECISIONS = [
+    ("a step whose area is not inside the home area (or a strategy step without its side)", "refused when the session is loaded; listed here", "-"),
+    ("another robot inside the home area, or within intrude-dist of ours, while a motion step runs (10 polls/s)",
+     "the step is stopped at once (as the time limit stops it: SIGINT to its group, the tool's zeros); all motion holds until the home area has been clear for clear s; the step is repeated from its start",
+     "'another robot (yellow 2) entered our half at (x, y); our robot stopped at (x, y)' once; after hold-limit s 'still in our half ...' (at most 3)"),
+    ("the same between steps", "no motion step starts; the same hold", "'another robot (...) entered our half at (x, y); our robot waits at (x, y)'"),
+    ("ball resting outside the home area, on the field, placeable (ball sessions)",
+     "a fetch: one place_ball run to the parking spot with a box round robot, ball and spot, only while no other robot is within corridor m of robot->ball and ball->spot (checked 10 times a second during it; a robot in the corridor stops it, a goto back inside, a retry later; at most fetch-tries)",
+     "after fetch-wait s blocked: 'ball at (x, y) in the other half, other robots near it (...): fetch it when you can' (reminders every realert s while nothing ball-free is left)"),
+    ("ball outside the home area in a goal / corner / against a wall / beyond the margin", "no rescue across the field", "'<where>: put it anywhere inside the field'"),
+    ("our robot outside the home area between steps (after a fetch, a strategy step, a stop)",
+     "one goto into the home area (0.3 m inside) when its straight way is clear; blocked for fetch-wait s: motion stops", "'our robot is outside our half at (x, y) and other robots block its way back: the session waits'"),
+    ("a strategy step: the robot within edge-guard m of the home area's open edge", "strategy off at once (the step counts as done; its track is logged)", "-"),
+    ("no-ball session: a ball within 0.15 m of the next step's area", "quiet hold up to ball-hold s, then the step moves to the end of the list (twice: skipped); the ball is never touched", "-"),
+    ("no-ball session: a ball inside the running step's area within ball-guard m of our robot", "the step is stopped (zeros) and moves to the end of the list", "-"),
+]
 
 def dry_run(sess, out=sys.stdout):
     p = lambda *a: print(*a, file=out)
@@ -865,20 +1250,36 @@ def dry_run(sess, out=sys.stdout):
     p(f"notify command: {'set' if os.environ.get('SOLO_NOTIFY_CMD') else 'NOT SET (alerts only printed)'}")
     if sess.procs: p(f"commanding programs running now: {busy(sess.procs) or 'none'}")
     if sess.strat: p(f"strategy: {'running' if sess.strat.running() else 'off'}; restart line {'present' if os.path.exists(sess.strat.cmdf) else 'MISSING'} ({sess.strat.cmdf})")
+    if sess.home is not None:
+        p(f"home area {','.join(f'{v:g}' for v in sess.home)} (open edges: {', '.join(k for k, v in open_edges(sess.home).items() if v) or 'none'}); "
+          f"ball {'IGNORED (no-ball session: no placement, fetch or ball alert)' if sess.no_ball else f'fetched to the parking spot {sess.park}'}; "
+          f"corridor {sess.corridor} m, fetch-wait {sess.fetch_wait:.0f} s; intruder distance {sess.intrude_dist} m, clear {sess.clear_s:.0f} s, hold-limit {sess.hold_limit:.0f} s")
+    elif sess.no_ball: p("no-ball session (no placement, fetch or ball alert); no home area")
+    refused = [st for st in sess.steps if st.get("_refused")]
+    p(f"refused at load: {len(refused)}" + "".join(f"\n    step {st.get('n')} ({st.get('label', st['kind'])}): REFUSED: {st['_refused']}" for st in refused))
     for st in sess.steps:
-        k = st["kind"]; needs = st.get("needs_ball", k == "place")
+        k = st["kind"]; needs = sess.needs(st)
         flags = f"needs_ball={needs} on_fail={st.get('on_fail', 'skip')} limit={sess.timeout_of(st):.0f}s" + (f" group={st['group']}" if st.get("group") else "") + (" FINAL" if st.get("final") else "")
         if k == "marker": what = f"marker {expand(st['text'], sess.vs)!r} {st.get('data', '')}"
         elif k == "wait": what = f"wait {st['seconds']} s"
-        elif k == "strategy": what = f"strategy on {st.get('seconds')} s, then off" if st.get("on", True) else "strategy off"
+        elif k == "strategy":
+            what = f"strategy on {st.get('seconds')} s, then off" if st.get("on", True) else "strategy off"
+            prm = dict(st.get("params") or {}); prm.update({"side": st["side"]} if st.get("side") else {})
+            if prm and st.get("on", True):
+                what += " with " + " ".join(f"-p {a}:={b}" for a, b in prm.items())
+                try: what += "\n        node line: " + " ".join(with_params(json.load(open(sess.strat.cmdf)), prm))
+                except Exception: what += "\n        node line: the saved line (solo.cmd) with these parameters replaced or added"
+            if st.get("end_ball_out"): what += f"; ends 0.5 s after the ball leaves {st['end_ball_out']}"
         else:
             env = sess.env_for(st); keys = sorted(set(sess.head.get("env", {})) | set(st.get("env", {})))
             what = " ".join(f"{v}={env.get(v, '')!r}" for v in keys) + " " + " ".join(sess.command(st))
-            if k == "place": what += f"\n        retry: SOLO_BOX={widen(env.get('SOLO_BOX', ''))!r} ... --carry 0.25"
+            if k == "place": what += f"\n        retry: SOLO_BOX={sess.env_for(st, retry=True).get('SOLO_BOX', '')!r} ... --carry 0.25"
         p(f"  {st.get('n'):>3} [{k}] {st.get('label', '')}  ({flags})\n        {what}")
         if st.get("keep_ball_out"): p(f"        ball kept 0.15 m clear of {st['keep_ball_out']}" + (f", parked at {st['park']} if not" if st.get("park") else ""))
+        if st.get("_boxes") and sess.home is not None: p(f"        area: {'; '.join(','.join(f'{v:g}' for v in r) for r in st['_boxes'][:4])}{' ...' if len(st['_boxes']) > 4 else ''}")
+        if st.get("_refused"): p(f"        REFUSED: {st['_refused']}")
     p("\nsituation -> what the supervisor does -> what the person receives")
-    for a, b, c in DECISIONS: p(f"  {a}\n      -> {b}\n      -> {c}")
+    for a, b, c in DECISIONS + (HOME_DECISIONS if sess.home is not None or sess.no_ball else []): p(f"  {a}\n      -> {b}\n      -> {c}")
 
 
 def main():
@@ -890,6 +1291,11 @@ def main():
     budget = float(opt("--budget", "0")); hq = opt("--hq", "http://127.0.0.1:8700")
     kw = dict(ball_lost=float(opt("--ball-lost", "5")), robot_lost=float(opt("--robot-lost", "2")), robot_wait=float(opt("--robot-wait", "10")),
               busy_wait=float(opt("--busy-wait", "20")), realert=float(opt("--realert", "180")))
+    hk = dict(corridor=float(opt("--corridor", "0.7")), fetch_wait=float(opt("--fetch-wait", "60")), intrude_dist=float(opt("--intrude-dist", "1.0")),
+              clear_s=float(opt("--clear", "5")), hold_limit=float(opt("--hold-limit", "120")), ball_hold=float(opt("--ball-hold", "30")))
+    home = opt("--home", None); park = opt("--park", None)
+    if park: hk["park"] = [float(v) for v in park.split(",")]
+    if "--no-ball" in args: hk["no_ball"] = True; args.remove("--no-ball")
     sim = opt("--sim", None)
     dry = "--dry-run" in args; args = [a for a in args if a != "--dry-run"]
     extra = {}
@@ -899,6 +1305,8 @@ def main():
     team, path = args[0], args[1]
     head, steps, vs = load_session(path, team, extra)
     budget_s = 60.0 * (budget or float(head.get("budget_min", 10)))
+    hk["home"] = home_rect(home if home is not None else head.get("home", ""))   # --home "" = the whole field
+    kw.update(hk)
     stamp = time.strftime("%Y%m%d_%H%M%S"); dd = data_dir()
     log_path = os.path.join(dd, "auto", f"{stamp}_session.jsonl"); events = os.path.join(dd, time.strftime("events_%Y%m%d.jsonl"))
     procs = Procs()

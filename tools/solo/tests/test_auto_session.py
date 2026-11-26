@@ -369,7 +369,7 @@ def test_page_world_reads_state(monkeypatch):
     def urlopen(url, timeout=1.0):
         calls.append(url); return R(seq[min(len(calls) - 1, len(seq) - 1)])
     monkeypatch.setattr(A.urllib.request, "urlopen", urlopen)
-    w = A.PageWorld("http://127.0.0.1:8700/")
+    w = A.PageWorld("http://127.0.0.1:8700/", period=0.25)
     try:
         time.sleep(1.9)
         s = w.snapshot()
