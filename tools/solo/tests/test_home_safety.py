@@ -71,7 +71,7 @@ def timed(s, clk):
     """[(t from now, log kind, message)] of the session's alert records, filled while it runs"""
     t0 = clk.t; rec = []; log = s.log
     def rlog(kind, **kw):
-        if kind in ("alert", "alert_held"): rec.append((round(clk.t - t0, 1), kind, kw.get("message", "")))
+        if kind in ("alert", "alert_held", "alert_merged"): rec.append((round(clk.t - t0, 1), kind, kw.get("message", "")))
         return log(kind, **kw)
     s.log = rlog
     return rec
@@ -340,32 +340,37 @@ def test_a_stopped_step_leaves_no_member_of_its_group(tmp_path):
 
 
 # ---- the alert cap and the alert command
-def test_alerts_are_capped_by_kind_and_robot_and_counted():
+def test_repeats_of_one_cause_back_off_alerts_are_spaced_and_merged_and_counted_at_the_end():
     s, run, note, world, strat, clk = make([])
     msg = lambda n: f"another robot ({s.who(n)}) entered our half at (-0.60, +0.30); our robot waits at (-1.00, +0.00)"
+    assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2") and len(note.sent) == 1        # the first: at once
+    clk.sleep(5); assert s.alert(msg("blue5"), kind="intruder", robot="blue5") and len(note.sent) == 1   # within the floor: merged
+    assert s.alert("no vision for 10.0 s (camera 0): the session holds", kind="no_info") and len(note.sent) == 2   # a new kind: at once
+    assert note.sent[-1].startswith("no vision for 10.0 s") and "| earlier: another robot (blue 5) entered" in note.sent[-1]
     sent = []
-    for k in range(3): sent.append(s.alert(msg("yellow2"), kind="intruder", robot="yellow2")); clk.sleep(10)   # one robot crossing three times
-    assert sent == [True, False, False] and len(note.sent) == 1
-    assert s.alert(msg("blue5"), kind="intruder", robot="blue5") and len(note.sent) == 2          # another robot: at once
-    assert s.alert("no vision for 1.0 s (camera 0): the session holds", kind="no_info") and len(note.sent) == 3
-    clk.sleep(40); assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2")              # the gap has passed
-    assert note.sent[-1].endswith("(2 similar alerts held back since the last one)")
-    t = clk.t; assert not s.alert(msg("yellow2"), kind="intruder", robot="yellow2", since=t)     # held while its cause is new ...
-    clk.sleep(s.ALERT_DUE); assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2", since=t)   # ... sent once it lasted
-    assert not note.sent[-1].endswith("held back since the last one)")                          # the one held was this one
-    assert not s.alert(msg("yellow2"), kind="intruder", robot="yellow2")                        # held, and never sent:
-    s.finish([], [])                                                                            # the session's end counts it
-    assert note.sent[-1].startswith("session ended") and note.sent[-1].endswith("alerts held back and never sent: 1 intruder (yellow 2)")
+    for k in range(2): clk.sleep(10); sent.append(s.alert(msg("yellow2"), kind="intruder", robot="yellow2"))   # crossing again
+    assert sent == [False, False] and len(note.sent) == 2
+    clk.sleep(40); assert s.alert(msg("yellow2"), kind="intruder", robot="yellow2")       # 65 s after the first
+    assert note.sent[-1].startswith(msg("yellow2")) and " (2 more times since the alert at " in note.sent[-1]
+    clk.sleep(100); assert not s.alert(msg("yellow2"), kind="intruder", robot="yellow2")  # then not before 300 s
+    clk.sleep(1); assert s.alert("two robots are seen as blue 3: ...; the session holds", kind="twins") and len(note.sent) == 4
+    clk.sleep(1); assert s.alert("two robots are seen as blue 3: ...; the session holds (again)", kind="twins") is False   # its backoff
+    clk.sleep(1); assert s.alert("which robot is ours was lost: ...", kind="ours_lost") and len(note.sent) == 5            # at once
+    clk.sleep(1); assert s.alert("the session has held ...", kind="hold") and len(note.sent) == 6                          # a new kind
+    clk.sleep(1); assert s.alert("the session has held ... again", kind="hold", robot="x") and len(note.sent) == 6         # floor
+    clk.sleep(s.ALERT_FLOOR); s.snap(); assert note.sent[-1] == "the session has held ... again"                           # sent alone
+    s.finish([], [])
+    assert note.sent[-1].startswith("session ended") and note.sent[-1].endswith("repeats not alerted: 1 intruder (yellow 2), 1 twins")
 
-def test_an_intruder_crossing_in_and_out_sends_one_alert_a_minute():
+def test_an_intruder_crossing_in_and_out_is_alerted_at_once_then_after_60_s_with_the_count():
     tl = []
     for k in range(8): tl += [(2.0 + 15 * k, dict(others=[("yellow2", -0.6, 0.3)])), (3.0 + 15 * k, dict(others=[]))]
     s, run, note, *_ = make([SPIN(label=f"s{k}") for k in range(12)], timeline=tl, budget=130, switch_after=0)
     s.run()
     a = [m for m in alerts(note) if "entered our half" in m]
-    assert 2 <= len(a) <= 3 and len(s.intrusions) >= 6 and "held back" in a[-1]
+    assert len(a) == 2 and len(s.intrusions) >= 6 and a[-1].endswith(")") and " (3 more times since the alert at " in a[-1]
 
-def test_a_camera_silent_again_for_good_is_alerted_again_after_info_alert():
+def test_a_camera_silent_again_for_good_is_alerted_again_once_its_backoff_has_passed():
     t = {}
     def frames(now):                                    # camera 1 silent 12 s, back, then silent for good from 25 s
         dt = now - t["0"]
@@ -373,8 +378,8 @@ def test_a_camera_silent_again_for_good_is_alerted_again_after_info_alert():
     s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(6)], frames, cameras=(0, 1), budget=600, switch_after=0)
     t["0"] = clk.t; rec = timed(s, clk); s.run()
     nv = [(dt, m) for dt, k, m in rec if k == "alert" and m.startswith("no vision for")]
-    assert len(nv) >= 2 and nv[0][0] <= 2.6 + 10 + 0.5 and 25.5 + 10 - 0.5 <= nv[1][0] <= 25.5 + 10 + 0.5
-    assert "(camera 1)" in nv[1][1] and "held back" not in nv[1][1]
+    assert len(nv) >= 2 and nv[0][0] <= 2.6 + 10 + 0.5 and 60 - 0.3 <= nv[1][0] - nv[0][0] <= 60 + 0.5
+    assert "(camera 1)" in nv[1][1] and "more time" not in nv[1][1]
 
 def test_another_robot_entering_after_one_that_crossed_is_alerted_at_once():
     tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (30.0, dict(others=[("blue5", -1.8, -1.0)]))]
@@ -383,12 +388,12 @@ def test_another_robot_entering_after_one_that_crossed_is_alerted_at_once():
     b5 = [(dt, m) for dt, k, m in rec if k == "alert" and "(blue 5)" in m]
     assert b5[0][0] <= 30.0 + 0.3 and b5[0][1].startswith("another robot (blue 5) entered our half at (-1.80, -1.00)")
 
-def test_the_same_robot_back_and_staying_is_alerted_once_it_has_stayed_a_few_seconds():
+def test_the_same_robot_back_and_staying_is_alerted_again_once_its_backoff_has_passed():
     tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (20.0, dict(others=[("yellow2", -1.8, 1.0)]))]
     s, run, note, world, strat, clk = make([SPIN(label=f"s{k}") for k in range(3)], timeline=tl, budget=100, switch_after=0)
     rec = timed(s, clk); s.run()
     y2 = [dt for dt, k, m in rec if k == "alert" and "(yellow 2) entered" in m]
-    assert len(y2) == 2 and 20.0 + s.ALERT_DUE - 0.3 <= y2[1] <= 20.0 + s.ALERT_DUE + 0.5
+    assert len(y2) == 2 and y2[0] <= 2.2 and 60 - 0.3 <= y2[1] - y2[0] <= 60 + 0.5
 
 def test_a_hold_under_information_that_comes_and_goes_alerts_and_reminds():
     t = {}

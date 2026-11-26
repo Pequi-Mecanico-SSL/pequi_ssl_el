@@ -239,8 +239,11 @@ def test_index_mismatch_refuses_to_start_and_stops_a_running_step():
     s, run, note, world, clk = make_raw([SPIN()], lambda t: [("blue", 3, -1.6, 0.9), ("blue", 0, -1.0, 0.0)])
     s.run()                                   # the page's robot (-1.0, 0.0) is blue 0, ours (blue 3) is at (-1.6, 0.9)
     assert run.calls == [] and s.stop_why.startswith("refused to start: the robot the tools are driving is not ours")
-    t_sw = [1e18]
-    s, run, note, world, clk = make_raw([SPIN(), SPIN()], lambda t: [("blue", 3, -1.0 if t < t_sw[0] else -1.7, 0.0)])
+    t_sw = [1e18]                             # the connector's robot moves to (-1.7, 0.0); ours stays at (-1.0, 0.0)
+    def frames(t):
+        if t >= t_sw[0]: world.set(robot=(-1.7, 0.0, 0.0))
+        return [("blue", 3, -1.0, 0.0)]
+    s, run, note, world, clk = make_raw([SPIN(), SPIN()], frames)
     t_sw[0] = clk.t + 3.0; s.run()
     assert len(run.calls) == 1 and run.stops and run.stops[0][1].startswith("not ours")
     assert any(m.startswith("the robot the tools are driving is not ours") for m in note.sent) and s.done == []

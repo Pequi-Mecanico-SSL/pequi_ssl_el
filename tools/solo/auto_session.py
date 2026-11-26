@@ -78,21 +78,30 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   --home "x0,x1,y0,y1" (or "home" in the session header; default: the whole field, no home checks) is where our robot
   works; its edges inside the field (more than 0.3 m from the lines) are "open": the side other teams use. Options:
   --corridor M (0.7), --fetch-wait S (60), --park X,Y (or "park" in the header), --intrude-dist M (1.0), --clear S (5),
-  --hold-limit S (120), --ball-hold S (30), --fetch-limit M (1.0), --info-alert S (10); --no-ball (or "ball": "ignore")
+  --hold-limit S (120), --ball-hold S (30), --fetch-limit M (1.0), --info-alert S (10), --alert-dead S (300); --no-ball (or "ball": "ignore")
   for a session that never touches a ball.
   Required with a home area: --our-id N (or SOLO_OUR_ID=N), our robot's vision id; the field's cameras, --cameras N
   (ids 0..N-1, or SOLO_CAMERAS=N) or --camera-ids 0,1,... (or SOLO_CAMERA_IDS): a listed camera that has not sent a
   detection frame for 0.5 s, or never, is no information (a camera that sends without being listed is listed from
-  its first frame on, and logged; frames from one during the start check refuse the start, naming its id);
+  its first frame on, and logged, its hold alerts saying it is not on the list; frames from one during the start check refuse the start, naming its id);
   SOLO_NOTIFY_CMD (a person must be alerted; a failing command is tried once more, both results in the session log):
   the start check sends "session starting: <name>, the -x half, budget N min" and the session starts only when the
-  command exits 0 (a dry run only prints it). The supervisor listens to the
+  command exits 0 (a dry run only prints it). Every other alert goes through a queue a background thread sends, so
+  no stop ever waits for the alert command (a stop comes first, its alert after); a failed send is retried after 15,
+  30, 60 s, then every 60 s, in order; an alert older than 10 min is dropped and counted ("N earlier alerts were not
+  delivered since HH:MM: ..." starts the next one delivered); every failure is in the session log. When no alert has
+  been delivered for --alert-dead s, no motion step runs (the robot stands, the hold of no information) until one
+  is; the first alert delivered then says so. At the end the session waits up to 20 s for the queue. The supervisor listens to the
   vision multicast itself (receive only: --vision GROUP:PORT, default 224.5.23.2:10006; --vision-iface ADDR, default
   $SOLO_IFACE or 0.0.0.0; --vision-mirror when the connector runs with mirror:=true) and sees every robot of both
   colours with its vision id; our robot is the detection of our colour and id within 0.25 m of the robot the tools
   drive. Two detections of one camera frame are always two robots; two cameras' detections of one colour + id are
   one robot when closer than 0.15 m plus 2 m/s per second of frame age difference (at most 0.35 m), or, for one its
-  camera no longer sees, 3 m/s. Every other detection is another robot. Two or more robots seen as our colour and
+  camera no longer sees, 3 m/s (at most 0.8 m). Every other detection is another robot. Our robot's last unambiguous
+  position is kept: a position taken as ours more than 0.25 m + 1.5 m/s x the time motion ran since then from it
+  (0.15 m when no motion step ran: it stood), also the one left after two copies were seen, is "which robot is ours
+  was lost: ..." (no information, alerted at once); it clears only when one robot of our colour and id has been seen
+  within 0.15 m of that position for --clear s, never by time alone. Two or more robots seen as our colour and
   id is no information (the connector may follow either): the session holds and alerts at once, "two robots are
   seen as blue 3: at (x, y) and (x, y), the tools cannot tell which is ours; the session holds". If the
   listener cannot be opened or the generated vision messages cannot be imported, the session does not start (without
@@ -125,11 +134,15 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   the surroundings of our robot and its corridor have been known and clear for --clear s, and runs with the same
   check plus the corridor. A drive back into the home area (after a fetch, a stop, a switch of halves) starts only
   while no other robot is inside the home area and its surroundings or its way back have been clear for --clear s;
-  a robot entering the home area or the way stops it; else alert and wait. The alert cap: an alert of one kind and
-  robot (another robot's alerts are never held back by this one's) within 60 s of the last one sent is held back
-  unless its cause has lasted 5 s; a held alert is repeated while its cause lasts, so a lasting problem is reported
-  within 5 s, and one whose cause went away is counted in the next alert of its kind and in "session ended" (the
-  start, the end of the session and "not ours" always go out).
+  a robot entering the home area or the way stops it. While it waits the alert names the reason (no information,
+  which robot is ours, a robot inside our half: after --info-alert s; robots on the way back: after --fetch-wait s)
+  and where our robot stands ("...; our robot at (x, y), outside our half: the session waits"); every hold alert
+  sent while our robot is outside the home area says where it stands. The alert rate: the robots first seen in one
+  poll go in one alert; a repeat of one cause (kind and robot) goes out at once the first time, then not before 60 s,
+  then not before 300 s, with the occurrences in between counted in its text ("(3 more times since the alert at
+  HH:MM:SS)") and in "session ended"; at most one alert every 20 s, except the first of each kind, two robots seen
+  as ours and which robot is ours lost: one held by this is merged into the next one sent (" | earlier: ...") or sent
+  once the 20 s have passed (the start, the end of the session and "not ours" always go out at once).
   Switching halves: a session is written for the -x half (its "home"); every coordinate in it is mirrored at run time
   (x -> -x; boxes, plan lines, goto points, placement and parking spots, ram and step directions d -> 180 - d, the
   strategy side negative <-> positive; spin rates are kept; mirrored plans go to OUT/mirrored, the shipped ones are
@@ -159,10 +172,13 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
     "no vision for 10.2 s: the session holds"                                     -> check the vision computer / network
     "two robots are seen as blue 3: at (x, y) and (x, y), the tools cannot tell which is ours; the session holds"
                                                          -> ask the other team to change its id, or change --our-id
+    "which robot is ours was lost: ...; the session holds" -> put our robot back where it stood (the text says where),
+                                                              the other robot away from it
     "the session has held for 10 s without 5 s known and clear: <causes>; the session holds"
                                                          -> check the vision of our robot (tag, lights, camera)
     "the robot the tools are driving is not ours: ..."      -> check --our-id and the connector (SOLO_OWN_COUNT, ids)
-    "our robot is outside our half at (x, y) and other robots block its way back: the session waits"
+    "another robot (yellow 1 at (x, y)) blocks the way back; our robot at (x, y), outside our half: the session waits"
+    "no alert could be delivered from 12:01:02 for 300 s: the session held all motion ..."  -> check the alert service
   Nothing is sent for a foreign ball in a no-ball session: a ball within 0.15 m of the next step's area holds it up to
   --ball-hold s, then the step moves to the end of the list; a ball inside the running step's area within 0.6 m of our
   robot stops the step (zeros), which moves to the end. series.py itself only delays a test's start while a ball is
@@ -584,13 +600,14 @@ MERGE_D = 0.15                      # m: two cameras' sightings of one colour + 
 MERGE_SPEED = 2.0                   # m/s: allowed for the age difference of the two sightings ...
 MERGE_CAP = 0.35                    # m: ... up to this distance
 SPEED_MAX = 3.0                     # m/s: a sighting its own camera no longer confirms (newer frames without it): the robot moved on
+LEFT_CAP = 0.8                      # m: ... up to this distance
 
 def merge_dets(dets):
     """[(colour, id, x, y, age, camera, left)] -> [(colour, id, x, y, age)] with the sightings of one robot merged.
     Two sightings of one camera (one frame) are never merged: they are two robots. Sightings of two cameras with the
     same colour + id are merged when closer than MERGE_D plus MERGE_SPEED per second of age difference, at most
     MERGE_CAP; for an older sighting its camera no longer confirms (left: that camera's newer frames do not hold this
-    colour + id) the allowance is SPEED_MAX per second (the robot left that camera's view), uncapped. The freshest
+    colour + id) the allowance is SPEED_MAX per second (the robot left that camera's view), at most LEFT_CAP. The freshest
     sighting stands for the group. Tuples without camera count as camera 0"""
     groups = []                                        # [first det, set of cameras]
     for q in sorted(dets, key=lambda q: q[4]):
@@ -600,7 +617,7 @@ def merge_dets(dets):
             o, cams = g
             if c != o[0] or i != o[1] or cam in cams: continue
             dt = abs(a - o[4]); d = math.hypot(x - o[2], y - o[3])
-            lim = MERGE_D + SPEED_MAX * dt if left else min(MERGE_D + MERGE_SPEED * dt, MERGE_CAP)
+            lim = min(MERGE_D + SPEED_MAX * dt, LEFT_CAP) if left else min(MERGE_D + MERGE_SPEED * dt, MERGE_CAP)
             if d < lim and (best is None or d < best[0]): best = (d, g)
         if best is not None: best[1][1].add(cam)
         else: groups.append([(c, i, x, y, a), {cam}])
@@ -851,6 +868,88 @@ class Notifier:
         print(f"\n*** ALERT (SOLO_NOTIFY_CMD failed: {'; '.join(out)}): {title}: {msg}\n", flush=True)
         return "failed: " + "; ".join(out)
 
+DELIVERED = ("rc 0", "ok", "not set", "no notifier")
+
+class AlertSender:
+    """delivers the session's alerts in order from a queue so that the supervisor never waits for the alert command:
+    a background thread (thread=False: pump() is called from the supervisor's polls and after every put, for a
+    simulated clock). A failed send is retried after RETRY s (then every RETRY[-1] s), the order kept; an alert older
+    than max_age s is dropped (unless kept) and counted, and the next one delivered starts with "N earlier alerts were
+    not delivered since HH:MM". Quiet notices go through the same queue, tried once. failing_for(): how long alerts
+    have been waiting without a delivery since a send failed (0 = none failing)"""
+    RETRY = (15.0, 30.0, 60.0)
+    def __init__(self, notifier, clock=time.time, log=None, thread=True, max_age=600.0):
+        self.notifier = notifier; self.clock = clock; self.logf = log or (lambda kind, **kw: None); self.max_age = max_age
+        self.q = deque(); self.L = threading.Lock(); self.wake = threading.Event(); self.halt = threading.Event()
+        self.fails = 0; self.next_t = -1e18; self.fail_since = None; self.dropped = 0; self.drop_since = None
+        self.delivered = 0; self.busy = False; self.threaded = thread
+        if thread: threading.Thread(target=self._loop, daemon=True).start()
+    def put(self, msg, title, keep=False, front=False, notice=False):
+        it = dict(msg=msg, title=title, t=self.clock(), keep=keep, notice=notice)
+        with self.L:
+            if front: self.q.appendleft(it)
+            else: self.q.append(it)
+        if self.threaded: self.wake.set()
+        else: self.pump()
+    def pending(self):
+        with self.L: return len(self.q)
+    def failing_for(self, now=None):
+        now = self.clock() if now is None else now
+        with self.L: return 0.0 if self.fail_since is None or not self.q else now - self.fail_since
+    def _loop(self):
+        while not self.halt.is_set():
+            try: self.pump()
+            except Exception as e: self.logf("alert_sender_error", error=repr(e))
+            self.wake.wait(0.2); self.wake.clear()
+    def pump(self):
+        """deliver what is due, head of the queue first; stops at the first failure (retried later)"""
+        while True:
+            now = self.clock()
+            with self.L:
+                if not self.q or self.busy: return
+                it = self.q[0]
+                if not it["notice"] and not it["keep"] and now - it["t"] > self.max_age:
+                    self.q.popleft(); self.dropped += 1; self.drop_since = it["t"] if self.drop_since is None else self.drop_since
+                    self.logf("alert_dropped", message=it["msg"], age=round(now - it["t"]), dropped=self.dropped); continue
+                if not it["notice"] and now < self.next_t: return
+                self.busy = True
+            try:
+                if it["notice"]:
+                    n = self.notifier
+                    r = n.notice(it["msg"], it["title"]) if n is not None and hasattr(n, "notice") else "log only"
+                    self.logf("notice_sent", message=it["msg"], sent=r)
+                    with self.L: self.q.remove(it)
+                    continue
+                msg = it["msg"]
+                if self.dropped:
+                    since = time.strftime("%H:%M", time.localtime(self.drop_since))
+                    msg = f"{self.dropped} earlier alert{'s were' if self.dropped > 1 else ' was'} not delivered since {since}: {msg}"
+                t_try = self.clock()
+                try: r = self.notifier.send(msg, it["title"]) if self.notifier is not None else "no notifier"
+                except Exception as e: r = f"error {e!r}"
+                ok = str(r).startswith(DELIVERED)
+                with self.L:
+                    if ok:
+                        self.q.remove(it); self.fails = 0; self.next_t = -1e18; self.fail_since = None
+                        self.dropped = 0; self.drop_since = None; self.delivered += 1
+                    else:
+                        self.fail_since = t_try if self.fail_since is None else self.fail_since
+                        self.next_t = self.clock() + self.RETRY[min(self.fails, len(self.RETRY) - 1)]; self.fails += 1
+                if ok: self.logf("alert_delivered", message=msg, sent=r, waited=round(t_try - it["t"], 1))
+                else:
+                    self.logf("notify_failed", message=msg, result=r, tries=self.fails, retry_in=round(self.next_t - self.clock(), 1))
+                    return
+            finally:
+                with self.L: self.busy = False
+    def drain(self, limit, sleep=time.sleep):
+        """wait up to limit s (on the sender's clock) for the queue to empty; -> True when it did"""
+        t0 = self.clock()
+        while self.pending() and self.clock() - t0 < limit:
+            if not self.threaded: self.pump()
+            if not self.pending(): break
+            sleep(0.5 if self.threaded else min(1.0, max(0.01, limit - (self.clock() - t0))))
+        return not self.pending()
+
 
 # ------------------------------------------------------------------ the session
 def load_session(path, team, extra_vars=None):
@@ -883,9 +982,12 @@ class Session:
                  home=None, no_ball=None, corridor=0.7, fetch_wait=60.0, fetch_tries=3, park=None, intrude_dist=1.0,
                  clear_s=5.0, hold_limit=120.0, ball_hold=30.0, ball_guard=0.6, edge_guard=0.9, our_id=None, vision_error=None,
                  robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0, switch_after=20.0, switch_cooldown=60.0, max_switches=4,
-                 home_auto=False, cameras=None, alert_gap=60.0):
+                 home_auto=False, cameras=None, alert_dead=300.0, alert_thread=None):
         self.cameras = None if cameras is None else sorted({int(c) for c in cameras})
-        self.alert_gap = alert_gap; self.alert_last = {}; self.alert_held = {}; self.alert_pending = {}; self.last_send = None
+        self.log_lock = threading.Lock(); self.alert_keys = {}; self.kinds_sent = set(); self.floor_buf = []; self.t_out = -1e18
+        self.last_send = None; self.alert_dead = alert_dead; self.dead = None
+        self.us_last = None; self.ours_lost = None; self.twins_seen = False     # telling our robot apart (snap)
+        self.moving = False; self.move_n = 0; self.move_acc = 0.0; self.t_move0 = None
         self.cameras_given = None if self.cameras is None else list(self.cameras); self.cams_logged = set()
         self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
         self.home_auto = home_auto; self.half_sign = 1; self.switches = []; self.notices = []; self.pending = None; self.current = None
@@ -907,44 +1009,97 @@ class Session:
         self.clear_s, self.hold_limit, self.ball_hold, self.ball_guard, self.edge_guard = clear_s, hold_limit, ball_hold, ball_guard, edge_guard
         self.park = tuple(park) if park else (tuple(self.head["park"]) if self.head.get("park") else (into(self.home, (-1.0, -1.0)) if self.home else None))
         self.fetch_inc = None; self.intrusions = []
+        self.sender = AlertSender(None, clock, lambda kind, **kw: self.log(kind, **kw), thread=(clock is time.time) if alert_thread is None else alert_thread)
         self.prepare()
 
     # ---- records
     def log(self, kind, **kw):
         d = dict(t=round(self.clock(), 3), clock=time.strftime("%H:%M:%S", time.localtime(self.clock())), kind=kind, **kw)
-        if self.echo: print(f"[{d['clock']}] {kind}: " + json.dumps(kw)[:300], flush=True)
-        if self.log_path:
-            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
-            with open(self.log_path, "a") as f: f.write(json.dumps(d) + "\n")
+        with self.log_lock:
+            if self.echo: print(f"[{d['clock']}] {kind}: " + json.dumps(kw)[:300], flush=True)
+            if self.log_path:
+                os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+                with open(self.log_path, "a") as f: f.write(json.dumps(d) + "\n")
         return d
-    ALERT_DUE = 5.0                     # s: a held alert whose cause has lasted this long goes out anyway
+    ALERT_BACKOFF = (60.0, 300.0)       # s: a repeat of one cause (kind, robot) not before this after its 1st, its 2nd and later alerts
+    ALERT_FLOOR = 20.0                  # s: at most one alert this often, except the kinds in ALERT_NOW and the first of each kind
+    ALERT_NOW = ("twins", "ours_lost")  # a person must get these at once (and the urgent ones: start, end, not ours)
+    def alert_due(self, kind, robot=None, since=None):
+        """the backoff of one cause: -> True when an alert with key (kind, robot) may go out now; else the occurrence
+        (since: when the cause began; one count per since, however often the caller repeats it) is counted"""
+        st = self.alert_keys.get((kind, robot)); now = self.clock(); since = now if since is None else since
+        if st is None or now - st["t"] >= self.ALERT_BACKOFF[min(st["n"], len(self.ALERT_BACKOFF)) - 1]: return True
+        if st["occ"] != since:
+            st["occ"] = since; st["between"] += 1
+            self.log("alert_held", of=kind, robot=robot, held=st["between"], next_in=round(st["t"] + self.ALERT_BACKOFF[min(st["n"], len(self.ALERT_BACKOFF)) - 1] - now, 1))
+        return False
     def alert(self, msg, *, kind, robot=None, since=None, title="field session", urgent=False):
-        """send an alert -> True when it went to the notifier (its result in self.last_send), False when held back.
-        The cap is keyed by (kind, robot): within alert_gap s of the last one sent with that key an alert is held
-        back (logged, counted in the next one sent with that key and in the session's end) unless its cause has
-        lasted ALERT_DUE s (since: when the cause began; None = now). The caller repeats a held alert while its cause
-        lasts, so a lasting problem is reported within ALERT_DUE s; a robot that only crossed is counted.
-        urgent (the session starts, ends or does not start; not ours): always sent"""
-        k = (kind, robot); now = self.clock(); since = now if since is None else since
-        if not urgent and self.alert_gap and now - self.alert_last.get(k, -1e18) < self.alert_gap and now - since < self.ALERT_DUE:
-            if self.alert_pending.get(k) != since:              # one count per cause, however often it is repeated
-                self.alert_pending[k] = since; self.alert_held[k] = self.alert_held.get(k, 0) + 1
-                self.log("alert_held", message=msg, title=title, of=kind, robot=robot, held=self.alert_held[k])
-            return False
-        if self.alert_pending.get(k) == since and self.alert_held.get(k): self.alert_held[k] -= 1     # this one goes out now
-        self.alert_pending.pop(k, None)
-        n = self.alert_held.pop(k, 0)
-        if n: msg += f" ({n} similar alert{'s' if n > 1 else ''} held back since the last one)"
-        self.alert_last[k] = now
-        self.alerts.append(msg); r = self.notifier.send(msg, title) if self.notifier else "no notifier"
-        self.last_send = r
-        self.log("alert", message=msg, title=title, of=kind, robot=robot, sent=r)
-        if not str(r).startswith(("rc 0", "ok", "not set", "no notifier")): self.log("notify_failed", message=msg, result=r)
+        """an alert -> True when it was accepted (queued for the sender, or merged into the next one sent), False when
+        the backoff of its cause holds it (alert_due: per (kind, robot), at once the first time, then not before 60 s,
+        then not before 300 s; the occurrences in between are counted in the text of the next one). robot may be a
+        list (one alert naming several robots, one key each). The rate floor: within ALERT_FLOOR s of the last alert
+        sent, an alert of a kind already sent this session (except ALERT_NOW) waits and is merged into the next one
+        sent (at the latest when the floor has passed). The caller repeats an alert held by the backoff while its cause
+        lasts. urgent (the start, the end, not ours, a node that does not stop): always sent at once"""
+        now = self.clock(); robots = robot if isinstance(robot, list) else [robot]
+        if not urgent:
+            if not all([self.alert_due(kind, r, since) for r in robots]): return False
+            between, t_prev = 0, None
+            for r in robots:
+                st = self.alert_keys.setdefault((kind, r), dict(n=0, t=now, between=0, occ=None))
+                if st["n"]:
+                    if st["occ"] == since and st["between"]: st["between"] -= 1      # the one counted is this one
+                    between += st["between"]; t_prev = st["t"] if t_prev is None else min(t_prev, st["t"])
+                st.update(n=st["n"] + 1, t=now, between=0, occ=None)
+            if between:
+                msg += f" ({between} more time{'s' if between > 1 else ''} since the alert at {time.strftime('%H:%M:%S', time.localtime(t_prev))})"
+            first = kind not in self.kinds_sent
+            if not first and kind not in self.ALERT_NOW and now - self.t_out < self.ALERT_FLOOR:
+                self.floor_buf.append(msg); self.kinds_sent.add(kind)
+                self.log("alert_merged", message=msg, of=kind, robot=robot, note=f"sent with the next alert (at most one every {self.ALERT_FLOOR:.0f} s)")
+                return True
+        self.kinds_sent.add(kind); self.dispatch(msg, title, kind, robot)
         return True
+    def dispatch(self, msg, title="field session", kind=None, robot=None):
+        """queue one alert for the sender, the alerts the rate floor held merged into it"""
+        if self.floor_buf:
+            msg += " | earlier: " + " | ".join(self.floor_buf); self.floor_buf = []
+        self.t_out = self.clock(); self.alerts.append(msg)
+        self.sender.notifier = self.notifier
+        self.log("alert", message=msg, title=title, of=kind, robot=robot, sent="queued")
+        self.sender.put(msg, title)
+    def alert_poll(self):
+        """called from every poll of the world: the alerts the rate floor held once it has passed; the sender (a
+        simulated clock); a dead alert channel (no alert delivered for alert_dead s while one fails)"""
+        now = self.clock()
+        if self.floor_buf and now - self.t_out >= self.ALERT_FLOOR:
+            m = self.floor_buf.pop(0); self.dispatch(m, kind="merged")
+        self.sender.notifier = self.notifier
+        if not self.sender.threaded: self.sender.pump()
+        f = self.sender.failing_for(now)
+        if self.dead is None and self.alert_dead and f >= self.alert_dead:
+            since = time.strftime("%H:%M:%S", time.localtime(now - f))
+            self.dead = dict(since=now, fail_since=now - f)
+            self.log("alert_channel_dead", failing_for=round(f, 1), note="no alert delivered: no motion step runs until one is")
+            self.sender.put(f"no alert could be delivered from {since} for {f:.0f} s: the session held all motion (robot standing) "
+                            f"from {time.strftime('%H:%M:%S', time.localtime(now))} until alerts were delivered again", "field session", keep=True, front=True)
+        elif self.dead is not None and f == 0.0 and not self.sender.pending():
+            self.log("alert_channel_back", dead_for=round(now - self.dead["since"], 1)); self.dead = None
+    def dead_text(self):
+        """with a home area: why motion holds for the alert channel, or None"""
+        if self.dead is None: return None
+        return f"no alert delivered since {time.strftime('%H:%M:%S', time.localtime(self.dead['fail_since']))}: the alert command fails"
+    def send_now(self, msg, title="field session", kind="start"):
+        """the start alert: sent synchronously (the session starts only when it is delivered)"""
+        r = self.notifier.send(msg, title) if self.notifier else "no notifier"
+        self.last_send = r; self.alerts.append(msg); self.t_out = self.clock(); self.kinds_sent.add(kind)
+        self.log("alert", message=msg, title=title, of=kind, sent=r)
+        if not str(r).startswith(DELIVERED): self.log("notify_failed", message=msg, result=r)
+        return r
     def notice(self, msg, title="field session"):
-        """a quiet notice (SOLO_NOTICE_CMD; unset: the log line only)"""
-        r = self.notifier.notice(msg, title) if self.notifier is not None and hasattr(self.notifier, "notice") else "log only"
-        self.notices.append(msg); self.log("notice", message=msg, title=title, sent=r)
+        """a quiet notice (SOLO_NOTICE_CMD; unset: the log line only), through the sender's queue"""
+        self.notices.append(msg); self.log("notice", message=msg, title=title, sent="queued")
+        self.sender.notifier = self.notifier; self.sender.put(msg, title, notice=True)
     def marker(self, text, data):
         """a line in the events file: data "use" (the recordings from here on are test data) or "skip" (they are not)"""
         line = dict(to=None, state=text, data=data, source="auto_session")
@@ -968,7 +1123,11 @@ class Session:
         is not fresh, the only one of our colour + id. Any other copy of our colour + id is another robot; when it
         cannot be told which one is ours, us_ambiguous says why (no information). raw_us: ours, (x, y, age) or None.
         twins: [(x, y)] of every robot seen as our colour + id when there are two or more (no information: the
-        connector may follow either). A camera that sends without being listed is listed from then on (logged once)"""
+        connector may follow either). A camera that sends without being listed is listed from then on (logged once).
+        Our robot's last unambiguous position is kept (track_us): a position taken as ours that it cannot have reached
+        from there is "which robot is ours was lost" (us_lost, no information), which only our robot seen again at that
+        position clears"""
+        self.alert_poll()
         s = self.world.snapshot()
         if self.cameras is not None:
             for c in sorted(set(s.get("cam_age") or {}) | set(s.get("unlisted") or ())):
@@ -990,10 +1149,51 @@ class Session:
                 else: amb = f"{len(mine)} robots seen as {who}, none within {MATCH_D} m of the tools' robot"
             elif len(mine) == 1: us = mine[0]
             elif mine: amb = f"{len(mine)} robots seen as {who} and the tools' robot not known"
+            us, s["us_lost"] = self.track_us(mine, us, amb)
             s["raw_us"] = (us[2], us[3], us[4]) if us is not None else None; s["us_ambiguous"] = amb
             s["twins"] = [(round(d[2], 2), round(d[3], 2)) for d in sorted(mine, key=lambda d: (d[2], d[3]))] if len(mine) > 1 else []
             s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us)]
         return s
+    ID_TIGHT = 0.15                     # m: how far our robot may seem to move while no motion step runs (it stands)
+    ID_SLACK, ID_SPEED = 0.25, 1.5      # m, m/s: how far it may move while a motion step runs: slack + speed x motion time
+    def motion(self, on):
+        """a motion child (or the strategy node) starts (on) or has stopped: the time it ran bounds our robot's moves"""
+        now = self.clock()
+        if on and not self.moving: self.moving = True; self.move_n += 1; self.t_move0 = now
+        elif not on and self.moving: self.moving = False; self.move_acc += now - self.t_move0
+    def motion_time(self, now):
+        return self.move_acc + (now - self.t_move0 if self.moving else 0.0)
+    def id_bound(self, now):
+        """how far our robot can be from its last unambiguous position now"""
+        p = self.us_last
+        if not self.moving and self.move_n == p["n"]: return self.ID_TIGHT        # no motion step since: it stood
+        return self.ID_SLACK + self.ID_SPEED * max(0.0, self.motion_time(now) - p["acc"])
+    def track_us(self, mine, us, amb):
+        """keep our robot's last unambiguous position (one robot of our colour + id, taken as ours); -> (us, why lost).
+        Lost: the position taken as ours is farther from it than id_bound (another robot with our colour + id, the
+        connector following it), also after two copies were seen and one disappeared. Lost holds until one robot of our
+        colour + id has been seen within ID_TIGHT of that position for clear_s without a break; time alone never clears it"""
+        now = self.clock(); who = f"{self.team} {self.our_id}"
+        if len(mine) > 1: self.twins_seen = True
+        if self.ours_lost is None and us is not None and len(mine) == 1 and amb is None and self.us_last is not None:
+            p = self.us_last; d = math.hypot(us[2] - p["x"], us[3] - p["y"]); lim = self.id_bound(now)
+            if d > lim:
+                how = "after two robots were seen as ours, the one left is" if self.twins_seen else "the robot seen as ours is"
+                self.ours_lost = dict(since=now, x=p["x"], y=p["y"], t_ok=None,
+                                      why=f"{how} {who} at ({us[2]:+.2f}, {us[3]:+.2f}), {d:.2f} m from where ours last stood at "
+                                          f"({p['x']:+.2f}, {p['y']:+.2f}) {now - p['t']:.0f} s ago (at most {lim:.2f} m)")
+                self.log("ours_lost", why=self.ours_lost["why"])
+        L = self.ours_lost
+        if L is not None:
+            back = len(mine) == 1 and math.hypot(mine[0][2] - L["x"], mine[0][3] - L["y"]) <= self.ID_TIGHT
+            if not back: L["t_ok"] = None; return None, f"which robot is ours was lost: {L['why']}"
+            L["t_ok"] = now if L["t_ok"] is None else L["t_ok"]
+            if now - L["t_ok"] < self.clear_s: return None, f"which robot is ours was lost: {L['why']}"
+            self.log("ours_found", at=[round(mine[0][2], 3), round(mine[0][3], 3)], lost_for=round(now - L["since"], 1))
+            self.ours_lost = None; us = mine[0] if us is None or us is mine[0] else us
+        if us is not None and len(mine) == 1 and amb is None:
+            self.us_last = dict(x=us[2], y=us[3], t=now, n=self.move_n, acc=self.motion_time(now)); self.twins_seen = False
+        return us, None
     def our_pos(self, s):
         """our robot's position when it is fresh: ours in the raw view, else the page's; None = not known"""
         o = s.get("raw_us")
@@ -1005,6 +1205,8 @@ class Session:
         camera must have sent a detection frame within VISION_FRESH s (a camera that never sent is no information);
         a fresh frame without another robot is clear"""
         if self.home is None: return None
+        d = self.dead_text()
+        if d: return d
         if "vision_age" not in s: return "no raw vision view"
         if self.cameras is not None:
             ca = s.get("cam_age") or {}
@@ -1012,9 +1214,11 @@ class Session:
             if late:
                 c = late[0]
                 more = f", {len(late) - 1} more camera(s) late" if len(late) > 1 else ""
+                if self.cameras_given is not None and c not in self.cameras_given: more = f", not on the camera list{more}"
                 return f"no vision for {min(ca[c], 1e4):.1f} s (camera {c}{more})" if c in ca else f"no vision from camera {c} since the start{more}"
         if s["vision_age"] > VISION_FRESH: return f"no vision for {min(s['vision_age'], 1e4):.1f} s"
         if s.get("page_age", 0) > PAGE_FRESH: return f"the field page has not answered for {min(s['page_age'], 1e4):.1f} s"
+        if s.get("us_lost"): return s["us_lost"]
         if s.get("twins"): return self.twin_text(s["twins"])
         if s.get("us_ambiguous"): return f"which robot is ours cannot be told: {s['us_ambiguous']}"
         if self.our_pos(s) is None: return f"our robot ({self.team} {self.our_id}) not seen in the vision"
@@ -1028,7 +1232,7 @@ class Session:
         if self.home is None or "vision_dets" not in s: return None
         r = s.get("robot") if s.get("robot") is not None and s.get("robot_age", 9) <= VISION_FRESH else None
         if r is None or s.get("vision_age", 9) > VISION_FRESH: return None
-        if s.get("twins") or s.get("us_ambiguous"): return None          # which one is ours cannot be told: no information
+        if s.get("twins") or s.get("us_ambiguous") or s.get("us_lost"): return None     # which one is ours cannot be told: no information
         o = s.get("raw_us")
         if o is not None and o[2] <= VISION_FRESH:
             d = math.hypot(r[0] - o[0], r[1] - o[1])
@@ -1039,13 +1243,13 @@ class Session:
                 return f"the tools' robot at ({r[0]:+.2f}, {r[1]:+.2f}) is {self.who(name)}; {self.team} {self.our_id} is not seen"
         return None
     def on_mismatch(self, why):
-        """the connector's index points at another robot: all motion stops, one alert, the session ends"""
+        """the connector's index points at another robot: all motion stops (first), one alert (queued), the session ends"""
         self.motion_halted = True
         if self.not_ours is None:
-            self.not_ours = why; self.log("not_ours", why=why)
-            self.alert(f"the robot the tools are driving is not ours: {why}; all motion stopped, the session ends", kind="not_ours", urgent=True)
-            self.stop_why = "the robot the tools are driving is not ours"; self.stop_req = max(self.stop_req, 1)
             if self.runner: self.runner.abort()
+            self.not_ours = why; self.stop_why = "the robot the tools are driving is not ours"; self.stop_req = max(self.stop_req, 1)
+            self.log("not_ours", why=why)
+            self.alert(f"the robot the tools are driving is not ours: {why}; all motion stopped, the session ends", kind="not_ours", urgent=True)
     def motion_check(self, s):
         """the rule of every watched motion (a fetch included): -> why to stop now, or None"""
         mm = self.mismatch(s)
@@ -1075,7 +1279,7 @@ class Session:
                     f"({', '.join(map(str, self.cameras_given))}): list every camera of the field (--camera-ids)")
         mm = self.mismatch(s)
         if mm: return f"the robot the tools are driving is not ours: {mm}"
-        self.alert(self.start_text(), kind="start", urgent=True)
+        self.send_now(self.start_text())
         if not str(self.last_send).startswith(("rc 0", "ok")):
             return f"the alert command did not deliver the start alert ({self.last_send}): a person must be alerted (SOLO_NOTIFY_CMD)"
         return None
@@ -1203,32 +1407,55 @@ class Session:
     @staticmethod
     def who(name):
         m = re.match(r"([a-z]+)(\d+)$", name); return f"{m.group(1)} {m.group(2)}" if m else name
+    def outside_note(self, s=None, p=None):
+        """", our robot at (x, y), outside our half" while our robot (its fresh position, else its last known) is outside
+        the home area; else "" """
+        if self.home is None: return ""
+        p = p or (self.our_pos(s) if s is not None else None)
+        if p is None and self.us_last is not None: p = (self.us_last["x"], self.us_last["y"])
+        if p is None or in_rect(p, robot_area(self.home), 0.05): return ""
+        return f", our robot at ({p[0]:+.2f}, {p[1]:+.2f}), outside our half"
+    def robots_text(self, ww):
+        """the robots of an intrusion in one phrase: "another robot (yellow 2) entered our half at (x, y)", or
+        "robots yellow 2 at (x, y), yellow 5 at (x, y) entered our half; blue 0 at (x, y) came within 0.80 m of our robot" """
+        if len(ww) == 1:
+            name, x, y, how = ww[0]
+            what = "entered our half" if how == "inside" else f"came within {how:.2f} m of our robot"
+            return f"another robot ({self.who(name)}) {what} at ({x:+.2f}, {y:+.2f})"
+        at = lambda q: f"{self.who(q[0])} at ({q[1]:+.2f}, {q[2]:+.2f})"
+        ins = [q for q in ww if q[3] == "inside"]; near = [q for q in ww if q[3] != "inside"]; parts = []
+        if ins: parts.append(("robots " if len(ins) > 1 else "another robot, ") + ", ".join(map(at, ins)) + (" entered" if len(ins) > 1 else ", entered") + " our half")
+        if near: parts.append(("robots " if len(near) > 1 else "another robot, ") + ", ".join(map(at, near)) + f" came within {max(q[3] for q in near):.2f} m of our robot")
+        return "; ".join(parts)
     def intrusion_hold(self, w, robot, during, inside_only=False):
         """hold all motion until the surroundings have been known and clear (no other robot inside the home area or
-        near ours; inside_only: inside the home area) for clear_s. Alerts: each robot that is inside or near at once
-        when it is first seen in this hold ("entered our half"); two robots seen as ours at once; no information
-        without a break for info_alert s ("no vision for N s: the session holds", once per cause); a hold that has
-        lasted info_alert s with nothing sent, whatever its causes (information that comes and goes; the causes seen
-        are named); then one reminder every hold_limit s (at most max_alerts in all). A held-back alert is repeated
-        while its cause lasts (alert).
+        near ours; inside_only: inside the home area) for clear_s. Alerts: the robots inside or near when first seen
+        in this hold, at once, one alert per poll naming every new one; two robots seen as ours, and which robot is
+        ours lost, at once; no information without a break for info_alert s ("no vision for N s: the session holds",
+        once per cause); a hold that has lasted info_alert s with nothing sent, whatever its causes (information that
+        comes and goes; the causes seen are named); then one reminder every hold_limit s (at most max_alerts in all).
+        While our robot is outside the home area every alert says where it stands. Repeats of one cause back off and
+        alerts are spaced (alert); an alert held by the backoff is repeated while its cause lasts. No alert for a dead
+        alert channel (it is itself the cause; the sender's notice reports it).
         -> True when clear, False when the session switched halves, ends or the robot is not ours"""
         t0 = self.clock()
         inc = dict(since=round(t0, 3), robots=w, robot=robot and [round(v, 3) for v in robot[:2]], during=during)
         self.intrusions.append(inc); self.log("intrusion", **inc)
         how_now = "stopped" if during else "waits"
-        h = dict(n=0, t_alert=None, named=set(), first={}, twins_sent=False, twins_t=None, causes={}, ni_sent=set())
+        h = dict(n=0, t_alert=None, named=set(), first={}, twins_sent=False, twins_t=None, lost_sent=False, causes={}, ni_sent=set())
         def where(p): return f"({p[0]:+.2f}, {p[1]:+.2f})" if p else "(not seen)"
         def sent(ok, now):
             if ok:
                 h["t_alert"] = now; h["n"] = max(h["n"], 1)
             return ok
         def entered(ww, rb, now):
-            for name, x, y, how in ww:
-                if name in h["named"]: continue
-                h["first"].setdefault(name, now)
-                what = "entered our half" if how == "inside" else f"came within {how:.2f} m of our robot"
-                if sent(self.alert(f"another robot ({self.who(name)}) {what} at ({x:+.2f}, {y:+.2f}); our robot {how_now} at {where(rb)}",
-                                   kind="intruder", robot=name, since=h["first"][name]), now): h["named"].add(name)
+            new = [q for q in ww if q[0] not in h["named"]]
+            for q in new: h["first"].setdefault(q[0], now)
+            due = [q for q in new if self.alert_due("intruder", q[0], h["first"][q[0]])]
+            if not due: return
+            msg = f"{self.robots_text(due)}; our robot {how_now} at {where(rb)}{', outside our half' if self.outside_note(p=rb) else ''}"
+            if sent(self.alert(msg, kind="intruder", robot=[q[0] for q in due], since=min(h["first"][q[0]] for q in due)), now):
+                h["named"].update(q[0] for q in due)
         entered(w, robot, t0)
         t_seen = t0; t_ni = None; self.motion_halted = True
         sw = dict(t_in=None, last=-1e9, other_bad=t0, corr_bad=t0, limit_sent=False)
@@ -1239,12 +1466,18 @@ class Session:
             ni = self.no_info(s); ww = [] if ni else self.intrusion(s)
             if inside_only: ww = [q for q in ww if q[3] == "inside"]
             if self.switch_rule(s, ni, ww, now, sw): self.motion_halted = False; return False
+            note = self.outside_note(s)
             if ni:
                 t_seen = now; t_ni = now if t_ni is None else t_ni
                 cause = re.sub(r"[-+]?\d+(?:\.\d+)?", "#", ni); h["causes"][cause] = ni
-                if s.get("twins") and not h["twins_sent"]:          # two robots as ours: at once
+                if self.dead is not None and ni == self.dead_text():       # the alert channel itself: nothing to send
+                    h["ni_sent"].add(cause); sent(True, now)
+                elif s.get("us_lost") and not h["lost_sent"]:               # which robot is ours was lost: at once
+                    if sent(self.alert(f"{ni}{note}; the session holds", kind="ours_lost", since=self.ours_lost and self.ours_lost["since"]), now):
+                        h["lost_sent"] = True; h["ni_sent"].add(cause)
+                elif s.get("twins") and not h["twins_sent"]:                # two robots as ours: at once
                     h["twins_t"] = h["twins_t"] or now
-                    if sent(self.alert(f"{ni}; the session holds", kind="twins", since=h["twins_t"]), now): h["twins_sent"] = True; h["ni_sent"].add(cause)
+                    if sent(self.alert(f"{ni}{note}; the session holds", kind="twins", since=h["twins_t"]), now): h["twins_sent"] = True; h["ni_sent"].add(cause)
             else:
                 t_ni = None
                 if ww:
@@ -1253,18 +1486,18 @@ class Session:
                 elif now - t_seen >= self.clear_s:
                     self.motion_halted = False; self.log("intrusion_clear", held=round(now - inc["since"], 1)); return True
             if ni and cause not in h["ni_sent"] and now - t_ni >= self.info_alert:   # no information without a break
-                if sent(self.alert(f"{ni}: the session holds", kind="no_info", since=t_ni), now): h["ni_sent"].add(cause)
+                if sent(self.alert(f"{ni}{note}: the session holds", kind="no_info", robot=cause, since=t_ni), now): h["ni_sent"].add(cause)
             elif h["t_alert"] is None and now - t0 >= self.info_alert:      # nothing sent yet: the hold as a whole
                 msg = (f"the session has held for {now - t0:.0f} s without {self.clear_s:.0f} s known and clear: "
-                       f"{'; '.join(h['causes'].values()) or 'no cause recorded'}; the session holds")
+                       f"{'; '.join(h['causes'].values()) or 'no cause recorded'}{note}; the session holds")
                 sent(self.alert(msg, kind="hold", since=t0), now)
             elif h["t_alert"] is not None and now - h["t_alert"] >= self.hold_limit and h["n"] < self.max_alerts:
                 n = h["n"] + 1
                 if ww: msg = (f"another robot ({self.who(ww[0][0])}) still in our half at ({ww[0][1]:+.2f}, {ww[0][2]:+.2f}) after "
-                              f"{now - t0:.0f} s: the session keeps holding (reminder {n}/{self.max_alerts})")
+                              f"{now - t0:.0f} s{note}: the session keeps holding (reminder {n}/{self.max_alerts})")
                 else: msg = (f"the session still holds after {now - t0:.0f} s: {ni or '; '.join(h['causes'].values()) or 'no cause recorded'}"
-                             f" (reminder {n}/{self.max_alerts})")
-                if sent(self.alert(msg, kind="hold_reminder", since=now - self.ALERT_DUE), now): h["n"] = n
+                             f"{note} (reminder {n}/{self.max_alerts})")
+                if sent(self.alert(msg, kind="hold_reminder", since=h["t_alert"]), now): h["n"] = n
             self.sleep(0.2)
         self.motion_halted = False
         return False
@@ -1287,7 +1520,7 @@ class Session:
             if not sw["limit_sent"]:
                 sw["limit_sent"] = True
                 self.alert(f"our robot changed halves {len(self.switches)} times: no more switches; the session holds in the {half_name(self.home)} half",
-                           kind="switch_limit", since=now - self.ALERT_DUE)
+                           kind="switch_limit", since=now)
             return False
         if self.switches and now - self.switches[-1] < self.switch_cooldown: return False
         self.switch_half(f"another robot ({self.who(sw['who'])}) stayed in the {half_name(self.home)} half for {now - sw['t_in']:.0f} s")
@@ -1438,27 +1671,45 @@ class Session:
         """our robot outside the home area: first no other robot inside the home area (the hold of intrusion_hold, its
         switch rule included), then wait until no robot is inside it and its surroundings (no robot within
         intrude_dist) or its straight way back (no robot within corridor m) have been known and clear for clear_s,
-        then one watched goto 0.3 m inside (path_watch); not clear within fetch_wait s: motion holds, alert, and it
-        waits. -> True when the robot arrived"""
+        then one watched goto 0.3 m inside (path_watch). While it waits, ok() records why it is not clear: no
+        information (no vision, which robot is ours), a robot inside our half, robots on the way back. The alert names
+        that reason and where our robot stands: after info_alert s for the first two, after fetch_wait s for robots on
+        the way; then reminders every realert s (at most max_alerts). -> True when the robot arrived"""
         if not self.ensure_home_clear(inside_only=True): return False
         s = self.look()
         if not self.robot_seen(s): return False
-        r0 = s["robot"][:2]; tgt = into(self.home, r0)
+        r0 = s["robot"][:2]; tgt = into(self.home, r0); why = dict(r=None, info=False)
         def ok(q):
-            if self.no_info(q): return False
-            w = self.intrusion(q); near = [v for v in w if v[3] != "inside"]
-            if len(near) < len(w): return False                         # a robot inside the home area
+            ni = self.no_info(q)
+            if ni: why.update(r=ni, info=True); return False
+            w = self.intrusion(q); inside = [v for v in w if v[3] == "inside"]
+            if inside: why.update(r=self.robots_text(inside), info=True); return False
             p = self.our_pos(q) or r0
-            return not near or not blockers(q.get("others"), [(p, tgt)], self.corridor)
-        if not self.wait_clear(ok, self.fetch_wait):
-            if self.out_of_time() or self.not_ours: return False
-            self.motion_halted = True; n = 0; t_block = self.clock() - self.fetch_wait
-            msg = f"our robot is outside our half at ({r0[0]:+.2f}, {r0[1]:+.2f}) and other robots block its way back: the session waits"
-            while True:
-                if n < self.max_alerts and self.alert(msg + (f" (reminder {n + 1}/{self.max_alerts})" if n else ""), kind="way_back", since=t_block): n += 1
-                if self.wait_clear(ok, self.realert): break
-                if self.out_of_time() or self.not_ours: return False
-            self.motion_halted = False
+            bb = blockers(q.get("others"), [(p, tgt)], self.corridor) if len(inside) < len(w) else []
+            if bb:
+                at = ", ".join(f"{self.who(n)} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in bb)
+                why.update(r=(f"robots {at} block the way back" if len(bb) > 1 else f"another robot ({at}) blocks the way back"), info=False)
+                return False
+            return True
+        t0 = t_bad = self.clock(); n = 0; t_al = None; halted = self.motion_halted
+        while True:
+            if self.out_of_time(): return False
+            q = self.look(); now = self.clock()
+            mm = self.mismatch(q)
+            if mm: self.on_mismatch(mm); return False
+            if ok(q):
+                if now - t_bad >= self.clear_s: break
+            else:
+                t_bad = now
+                due = (now - t0 >= (self.info_alert if why["info"] else self.fetch_wait)) if n == 0 else \
+                      (n < self.max_alerts and now - t_al >= self.realert)
+                if due:
+                    p = self.our_pos(q) or (self.us_last and (self.us_last["x"], self.us_last["y"])) or r0
+                    msg = (f"{why['r']}; our robot at ({p[0]:+.2f}, {p[1]:+.2f}), outside our half: the session waits"
+                           + (f" (reminder {n + 1}/{self.max_alerts})" if n else ""))
+                    if self.alert(msg, kind="way_back", since=t0 if n == 0 else t_al): n += 1; t_al = now; self.motion_halted = True
+            self.sleep(0.5)
+        self.motion_halted = halted
         self.log(label, robot=[round(v, 3) for v in r0], to=list(tgt), after_fetch=after_fetch)
         st = dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30)
         if not self.motion_ok(st): return False
@@ -1656,7 +1907,9 @@ class Session:
         if k in MOTION:                                  # every motion child is watched: the watch is chosen here
             watch = watch if watch is not None else self.watch_for(st)
             if watch is None and self.home is not None: raise RuntimeError(f"motion step {st.get('label', k)!r} without its watch")
-        r = self.runner.run(argv, env, self.timeout_of(st), tee=tee, watch=watch)
+        if k in MOTION: self.motion(True)
+        try: r = self.runner.run(argv, env, self.timeout_of(st), tee=tee, watch=watch)
+        finally: self.motion(False)
         r["ok"] = self.judge(st, r) and not r.get("stopped"); r["stuck"] = "robot stuck" in (r.get("line") or "")
         self.log("step", n=st.get("n"), label=st.get("label", ""), step_kind=k, cmd=argv,
                  env={v: env[v] for v in ("SOLO_BOX", "SOLO_RAMP", "SOLO_BRAKE") if v in env}, start=round(r.get("t0", t0), 3),
@@ -1680,6 +1933,7 @@ class Session:
             return dict(ok=False, line="strategy cannot start")
         params = dict(st.get("params") or {})
         if st.get("side"): params["side"] = st["side"]
+        self.motion(True)
         on = self.strat.on(params) if params else self.strat.on(); t_on = self.clock(); end = t_on + float(st.get("seconds", 10))
         if not on: self.log("strategy_refused", n=st.get("n"), why=getattr(self.strat, "why", ""))
         track = []; stopped = None; ended = None; t_out = None; ball_box = rects(st.get("end_ball_out", "")); guard = float(st.get("edge_guard", self.edge_guard))
@@ -1695,11 +1949,11 @@ class Session:
                 t_out = t_out if t_out is not None else self.clock()
                 if self.clock() - t_out >= 0.5: ended = f"ball out of {st['end_ball_out']} at {t_out - t_on:.1f} s"; break
             self.sleep(0.1)
-        off = self.strat.off()
+        off = self.strat.off(); self.motion(False)
         self.log("step", n=st.get("n"), label=st.get("label", ""), step_kind="strategy", on=True, seconds=st.get("seconds"), started=on, stopped=off,
                  ok=on and off and not stopped, start=round(t0, 3), end=round(self.clock(), 3), params=params, ended_early=ended,
                  interrupted=stopped, track=track[::2])
-        if not off: self.stop_why = "the strategy node did not stop"; self.alert("the strategy node did not stop: the session ends; stop it on the field page", kind="strategy", urgent=True); self.stop_req = max(self.stop_req, 1)
+        if not off: self.stop_why = "the strategy node did not stop"; self.stop_req = max(self.stop_req, 1); self.alert("the strategy node did not stop: the session ends; stop it on the field page", kind="strategy", urgent=True); self.stop_req = max(self.stop_req, 1)
         return dict(ok=on and off and not stopped, line=f"strategy on {st.get('seconds')} s" + ("" if on and off else " FAILED") + (f" (ended: {ended})" if ended else ""),
                     stopped=stopped)
 
@@ -1867,7 +2121,7 @@ class Session:
         why = self.preflight()
         if why:
             self.stop_why = f"refused to start: {why}"; self.log("refused_start", why=why); print(f"refused to start: {why}", flush=True)
-            self.alert(f"session not started: {why}", kind="not_started", urgent=True); return self
+            self.alert(f"session not started: {why}", kind="not_started", urgent=True); self.drain(); return self
         try:
             if self.home_auto and self.home is not None: self.choose_half()
             self.loop(pending)
@@ -1903,11 +2157,18 @@ class Session:
             if st["kind"] in ("marker", "cmd", "wait"): self.run_step(st)
         if not any(st["kind"] == "marker" for st in final): self.marker("auto session end", "skip")
         summary = f"session ended: {self.stop_why} ({len(self.done)} steps done, {len(self.skipped)} skipped, {len(pending)} not run)"
-        held = {k: v for k, v in self.alert_held.items() if v}
+        held = {k: v["between"] for k, v in self.alert_keys.items() if v["between"]}
         if held:
-            summary += "; alerts held back and never sent: " + ", ".join(f"{v} {k[0]}" + (f" ({self.who(k[1])})" if k[1] else "") for k, v in sorted(held.items(), key=str))
+            summary += "; repeats not alerted: " + ", ".join(f"{v} {k[0]}" + (f" ({self.who(str(k[1]))})" if k[1] else "") for k, v in sorted(held.items(), key=str))
+        if self.dead is not None: summary += f"; {self.dead_text()}"
         self.log("session_end", why=self.stop_why, done=self.done, skipped=self.skipped, not_run=[s.get("n") for s in pending], alerts=len(self.alerts))
         self.alert(summary, kind="end", urgent=True)
+        self.drain()
+    DRAIN = 20.0                        # s: at the end, how long the session waits for the queued alerts to go out
+    def drain(self):
+        ok = self.sender.drain(self.DRAIN, self.sleep)
+        if not ok: self.log("alerts_not_delivered", pending=self.sender.pending(), note=f"the session ends with alerts not delivered after {self.DRAIN:.0f} s")
+        return ok
 
 
 # ------------------------------------------------------------------ simulation (tests and --sim): no process, no network
@@ -1950,30 +2211,49 @@ class SimNotifier:
 class SimRunner:
     """script: [dict(match="substring of the command", line=..., rc=0, dur=s, world={...}, timed_out=False, call=f)],
     consumed in order when the command matches the head; otherwise a default result: placements succeed and move
-    the ball to the spot, gotos arrive, tests and series end well"""
+    the ball to the spot, gotos arrive, tests and series end well. A robot the step moves (a goto's point, the
+    robot of "world", a move made by "call") drives there during the step: a straight line at no more than SPEED"""
+    SPEED = 1.0
     def __init__(self, clock, world, script=()):
         self.clock, self.world, self.script, self.calls, self.stops = clock, world, list(script), [], []
-    def _pass(self, dur, watch):
-        """the step's time on the simulated clock in 0.1 s polls; -> the watch's reason when it stops the step"""
-        end = self.clock.t + dur
+    def _robot(self):
+        w = self.world
+        return tuple(w.robot) if getattr(w, "robot_on", True) and getattr(w, "robot", None) is not None else None
+    def _pass(self, dur, watch, move=None):
+        """the step's time on the simulated clock in 0.1 s polls; -> the watch's reason when it stops the step.
+        move (a, b, T): the robot from a to b in T s"""
+        t0 = self.clock.t; end = t0 + dur
         while self.clock.t < end - 1e-9:
             self.clock.t = min(end, self.clock.t + 0.1)
+            if move:
+                a, b, T = move; k = min(1.0, (self.clock.t - t0) / T) if T > 0 else 1.0
+                self.world.set(robot=tuple(a[i] + k * (b[i] - a[i]) for i in range(2)) + tuple(b[2:]))
             if watch:
                 why = watch()
                 if why: self.stops.append((self.clock.t, why)); return why
         return None
     def run(self, argv, env, timeout, tee=None, watch=None):
         cmd = " ".join(argv); self.calls.append(dict(cmd=cmd, env=env, timeout=timeout, watched=watch is not None)); t0 = self.clock()
+        def way(a, b, T):
+            if a is None or b is None or math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-9: return None
+            return (a, tuple(b), max(T, math.hypot(b[0] - a[0], b[1] - a[1]) / self.SPEED))
         if self.script and self.script[0]["match"] in cmd:
-            e = self.script.pop(0)
-            if e.get("call"): e["call"]()
-            why = self._pass(e.get("dur", 5.0), watch)
+            e = self.script.pop(0); dur = e.get("dur", 5.0); r0 = self._robot(); move = None
+            if e.get("call"):
+                e["call"](); r1 = self._robot()
+                if r0 is not None and r1 is not None and r1 != r0:         # the call moved the robot: it drives there
+                    self.world.set(robot=r0); move = way(r0, r1, 0.0)
+            wr = (e.get("world") or {}).get("robot")
+            if move is None and wr is not None and r0 is not None: move = way(r0, wr, dur)
+            why = self._pass(dur, watch, move)
             if why: return dict(rc=-2, timed_out=False, line=f"stopped by the supervisor: {why}", data=None, t0=t0, t1=self.clock(), stopped=why)
             if "world" in e: self.world.set(**e["world"])
             line = e["line"] if isinstance(e["line"], str) else json.dumps(e["line"])
             data, line = result_of([line])
             return dict(rc=e.get("rc", 0), timed_out=e.get("timed_out", False), line=line, data=data, t0=t0, t1=self.clock())
-        why = self._pass(5.0, watch)
+        move = None
+        if "goto.py" in cmd: move = way(self._robot(), (float(argv[3]), float(argv[4]), 0.0), 5.0)
+        why = self._pass(5.0, watch, move)
         if why: return dict(rc=-2, timed_out=False, line=f"stopped by the supervisor: {why}", data=None, t0=t0, t1=self.clock(), stopped=why)
         if "place_ball.py" in cmd:
             x, y = float(argv[3]), float(argv[4]); self.world.set(ball=(x, y))
@@ -2042,7 +2322,7 @@ HOME_DECISIONS = [
      "after fetch-wait s blocked: 'ball at (x, y) in the other half, other robots near it (...): fetch it when you can' (reminders every realert s while nothing ball-free is left)"),
     ("ball outside the home area in a goal / corner / against a wall / beyond the margin", "no rescue across the field", "'<where>: put it anywhere inside the field'"),
     ("our robot outside the home area between steps (after a fetch, a strategy step, a stop)",
-     "one goto into the home area (0.3 m inside) when its straight way is clear; blocked for fetch-wait s: motion stops", "'our robot is outside our half at (x, y) and other robots block its way back: the session waits'"),
+     "one goto into the home area (0.3 m inside) when its straight way is clear; blocked for fetch-wait s: motion stops", "'<the reason>; our robot at (x, y), outside our half: the session waits' (no information, a robot inside: after info-alert s)"),
     ("a strategy step: the robot within edge-guard m of the home area's open edge", "strategy off at once (the step counts as done; its track is logged)", "-"),
     ("no-ball session: a ball within 0.15 m of the next step's area", "quiet hold up to ball-hold s, then the step moves to the end of the list (twice: skipped); the ball is never touched", "-"),
     ("no-ball session: a ball inside the running step's area within ball-guard m of our robot", "the step is stopped (zeros) and moves to the end of the list", "-"),
@@ -2105,7 +2385,7 @@ def main():
               clear_s=float(opt("--clear", "5")), hold_limit=float(opt("--hold-limit", "120")), ball_hold=float(opt("--ball-hold", "30")))
     home = opt("--home", None); park = opt("--park", None)
     our_id = opt("--our-id", os.environ.get("SOLO_OUR_ID") or None); hk["fetch_limit"] = float(opt("--fetch-limit", "1.0"))
-    hk.update(info_alert=float(opt("--info-alert", "10")), switch_after=float(opt("--switch-after", "20")),
+    hk.update(info_alert=float(opt("--info-alert", "10")), alert_dead=float(opt("--alert-dead", "300")), switch_after=float(opt("--switch-after", "20")),
               switch_cooldown=float(opt("--switch-cooldown", "60")), max_switches=int(opt("--max-switches", "4")))
     vg, _, vp = opt("--vision", f"{VISION_GROUP}:{VISION_PORT}").rpartition(":"); viface = opt("--vision-iface", os.environ.get("SOLO_IFACE", "0.0.0.0"))
     vmirror = "--vision-mirror" in args; args = [a for a in args if a != "--vision-mirror"]
