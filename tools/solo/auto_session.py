@@ -376,6 +376,15 @@ def near_open_edge(p, home, guard):
     return ((e["x0"] and p[0] < home[0] + guard) or (e["x1"] and p[0] > home[1] - guard) or
             (e["y0"] and p[1] < home[2] + guard) or (e["y1"] and p[1] > home[3] - guard))
 
+GOTO_MARGIN = 0.25                  # m: the series drive to a test's start keeps this far inside the home area's open edges
+
+def goto_area(home):
+    """SOLO_GOTO_BOX of a series step with a home area: the home area shrunk by GOTO_MARGIN along its open edges only
+    (characterize.py goto has no early braking: it stops when it leaves the box, at up to 0.6 m/s); walls stay"""
+    e = open_edges(home); m = GOTO_MARGIN
+    return [home[0] + m if e["x0"] else home[0], home[1] - m if e["x1"] else home[1],
+            home[2] + m if e["y0"] else home[2], home[3] - m if e["y1"] else home[3]]
+
 def path_box(pts, pad=0.35):
     """a SOLO_BOX spec around the points, inside the placer's own area"""
     lx, ly = FX + PLACER_LIM, FY + PLACER_LIM
@@ -469,7 +478,7 @@ def mirror_plan_line(e):
     if "args" in e: e["args"] = mirror_args(e.get("test"), e["args"])
     return e
 
-MIRROR_ENV = ("SOLO_BOX", "SOLO_BRAKE_BOX")
+MIRROR_ENV = ("SOLO_BOX", "SOLO_BRAKE_BOX", "SOLO_GOTO_BOX")
 
 def mirror_env(env):
     return {k: (mirror_spec(v) if k in MIRROR_ENV and isinstance(v, str) and "$" not in v else v) for k, v in (env or {}).items()}
@@ -1751,6 +1760,8 @@ class Session:
                 unknown = sorted(n for n in names if n not in solo_procs.NODE_PARAMS)
                 if unknown: why = f"node parameters the node does not declare: {', '.join(unknown)}"
                 elif st.get("side") not in (None, "negative", "positive", "auto"): why = f"side {st.get('side')!r}: negative, positive or auto"
+            if st["kind"] == "series" and self.home is not None and not why:
+                why = self.goto_box(self.given_env(st).get("SOLO_GOTO_BOX"))[1]
             if st["kind"] in MOTION and not why:
                 bx, err = self.step_boxes(st); st["_boxes"] = bx
                 if self.home is not None:
@@ -2335,22 +2346,39 @@ class Session:
         """the child's environment: this process's, the header's env, the step's env (a value None removes the
         variable). characterize.py reads SOLO_BRAKE as a number: for a test step SOLO_BRAKE=auto is resolved the way
         series.py does before any braking is measured (SOLO_BRAKE_FIRST, default 0.8). A series step gets SOLO_GOTO_BOX,
-        the area its robot may cross on the way to each test's start: the home area (the current one after a switch
-        of halves), without a home area the header's SOLO_BOX; a step's own SOLO_GOTO_BOX is kept"""
-        env = dict(os.environ)
-        for src in (self.head.get("env", {}), st.get("env", {})):
-            for k, v in expand(src, self.vs).items():
-                if v is None: env.pop(k, None)
-                else: env[k] = str(v)
+        the area its robot may cross on the way to each test's start: with a home area always goto_box (the current
+        home area after a switch of halves), without one the header's SOLO_BOX unless the step or the header sets it"""
+        env = self.given_env(st)
         if st.get("kind") == "test" and env.get("SOLO_BRAKE") == "auto":
             env["SOLO_BRAKE"] = str(float(env.get("SOLO_BRAKE_FIRST") or "0.8"))
-        if st.get("kind") == "series" and not env.get("SOLO_GOTO_BOX"):     # the way to each test's start (series.py)
-            area = ",".join(f"{v:g}" for v in self.home) if self.home is not None else str(expand(self.head.get("env", {}), self.vs).get("SOLO_BOX") or "")
+        if st.get("kind") == "series" and self.home is not None:            # the way to each test's start (series.py)
+            env["SOLO_GOTO_BOX"] = self.goto_box(env.get("SOLO_GOTO_BOX"))[0]
+        elif st.get("kind") == "series" and not env.get("SOLO_GOTO_BOX"):
+            area = str(expand(self.head.get("env", {}), self.vs).get("SOLO_BOX") or "")
             if area: env["SOLO_GOTO_BOX"] = area
         if retry:
             env["SOLO_BOX"] = widen(env.get("SOLO_BOX", ""))
             if self.home is not None and st.get("label") != "fetch the ball": env["SOLO_BOX"] = clip_rects(env["SOLO_BOX"], robot_area(self.home))
         return env
+    def given_env(self, st):
+        """this process's environment, the header's env, the step's env (a value None removes the variable)"""
+        env = dict(os.environ)
+        for src in (self.head.get("env", {}), st.get("env", {})):
+            for k, v in expand(src, self.vs).items():
+                if v is None: env.pop(k, None)
+                else: env[k] = str(v)
+        return env
+    def goto_box(self, given):
+        """-> (SOLO_GOTO_BOX of a series step with a home area, why a given value is refused or None): goto_area of the
+        home area; a given value (environment, header or step) clipped to it, refused when a rectangle of it does not
+        intersect it"""
+        area = goto_area(self.home); spec = ",".join(f"{v:g}" for v in area)
+        if not given: return spec, None
+        try: rs = rects(given)
+        except ValueError: return spec, f"SOLO_GOTO_BOX {given!r}: want x0,x1,y0,y1[;...]"
+        if not rs or any(len(r) != 4 or min(r[1], area[1]) <= max(r[0], area[0]) or min(r[3], area[3]) <= max(r[2], area[2]) for r in rs):
+            return spec, f"SOLO_GOTO_BOX {given} does not intersect the area of the drive to a test's start {spec} (the home area less {GOTO_MARGIN:g} m at its open edges)"
+        return ";".join(",".join(f"{v:g}" for v in (max(r[0], area[0]), min(r[1], area[1]), max(r[2], area[2]), min(r[3], area[3]))) for r in rs), None
     def timeout_of(self, st):
         if "timeout" in st: return float(st["timeout"])
         if st["kind"] == "strategy": return float(st.get("seconds", 0)) + 15.0

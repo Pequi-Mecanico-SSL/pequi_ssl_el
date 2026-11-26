@@ -469,16 +469,30 @@ def test_a_failing_watch_stops_the_step():
     assert "fail safe: stop" in inspect.getsource(A.Runner.run)
 
 
-def test_a_series_step_gets_the_home_area_for_the_way_to_each_tests_start():
+def test_a_series_step_gets_the_home_area_less_its_open_edges_for_the_way_to_each_tests_start():
     os.environ.pop("SOLO_GOTO_BOX", None)
+    assert A.goto_area(A.home_rect(HOME)) == [-2.2, -0.35, -1.45, 1.45]                               # only x1 is open
+    assert A.goto_area([-1.5, 1.5, -0.5, 1.45]) == [-1.25, 1.25, -0.25, 1.45]
     s, *_ = make([SPIN()], head={"kind": "session", "env": {"SOLO_BOX": HOME}})
     st = dict(kind="series", plan="p.jsonl", env={"SOLO_BOX": ""})
-    assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.2,-0.1,-1.45,1.45" and s.env_for(st)["SOLO_BOX"] == ""
-    assert s.env_for(dict(st, env={"SOLO_GOTO_BOX": "-2,-1,-1,1"}))["SOLO_GOTO_BOX"] == "-2,-1,-1,1"     # the step's own is kept
+    assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.2,-0.35,-1.45,1.45" and s.env_for(st)["SOLO_BOX"] == ""
+    assert s.env_for(dict(st, env={"SOLO_GOTO_BOX": "-2,-1,-1,1"}))["SOLO_GOTO_BOX"] == "-2,-1,-1,1"     # a step's own, inside: kept
+    assert s.env_for(dict(st, env={"SOLO_GOTO_BOX": "-2.4,0.5,-1,1"}))["SOLO_GOTO_BOX"] == "-2.2,-0.35,-1,1"   # clipped
+    os.environ["SOLO_GOTO_BOX"] = "-3,3,-2,2"                                                         # from the shell: clipped too
+    try: assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.2,-0.35,-1.45,1.45"
+    finally: os.environ.pop("SOLO_GOTO_BOX", None)
     assert "SOLO_GOTO_BOX" not in s.env_for(SPIN())                                                    # series steps only
     s.home = A.mirror_rect(s.home)                                                                     # after a switch of halves
-    assert s.env_for(st)["SOLO_GOTO_BOX"] == "0.1,2.2,-1.45,1.45"
+    assert s.env_for(st)["SOLO_GOTO_BOX"] == "0.35,2.2,-1.45,1.45"
+    assert A.mirror_env({"SOLO_GOTO_BOX": "-2,-1,-1,1"}) == {"SOLO_GOTO_BOX": "1,2,-1,1"}
     s, *_ = make([SPIN()], head={"kind": "session", "env": {"SOLO_BOX": "-2.05,2.05,-1.3,1.3"}}, home=None)
     assert s.env_for(st)["SOLO_GOTO_BOX"] == "-2.05,2.05,-1.3,1.3"                                     # no home area: the header's box
+    assert s.env_for(dict(st, env={"SOLO_GOTO_BOX": "5,6,0,1"}))["SOLO_GOTO_BOX"] == "5,6,0,1"           # ... or the step's own
     s, *_ = make([SPIN()], home=None)
     assert "SOLO_GOTO_BOX" not in s.env_for(st)
+
+def test_a_series_goto_box_outside_the_drive_area_is_refused_at_load():
+    steps = [dict(kind="series", plan="missing.jsonl", env={"SOLO_GOTO_BOX": "-0.3,0.5,-1,1"}, label="over the open edge")]
+    s, run, note, *_ = make(steps)
+    assert steps[0]["_refused"] == ("SOLO_GOTO_BOX -0.3,0.5,-1,1 does not intersect the area of the drive to a test's start "
+                                    "-2.2,-0.35,-1.45,1.45 (the home area less 0.25 m at its open edges)")
