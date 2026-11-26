@@ -63,6 +63,12 @@ of their series plans, `OUT` (default `$SOLO_DATA/sessions`, or `--var OUT=DIR`)
 Each session writes its step log to `$SOLO_DATA/auto/` and its markers to `$SOLO_DATA/events_<date>.jsonl`: one line
 per marker with its text and `"data": "use"` or `"skip"`, so that the recordings taken at the same time (vision,
 robot) can be cut into the stretches that are test data and the ones that are not.
+With a home area the supervisor keeps our robot's last unambiguous position with the time of its detection; a
+robot of our colour and id seen farther from it than 0.15 m + `--max-speed` (2.0 m/s) x the time our robot may have
+been moving since then (every interval a motion step or the strategy node ran, each extended by `--settle` s, 1.5,
+after its stop for the reaction delay and braking) is "which robot is ours was lost": the session holds until our
+robot is seen back at that position. A camera dropout or a stop at full speed stays inside that allowance; a robot
+standing still allows 0.15 m.
 
 `hq.py`, `auto_session.py` and `place_ball.py` share `procs.py`: the list of programs that command the robot (the
 strategy node and every tool here that publishes velocity commands), the test for a running instance of one, and the
