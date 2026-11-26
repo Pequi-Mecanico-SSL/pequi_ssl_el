@@ -68,26 +68,38 @@ detection. A single robot of our colour and id seen after it is ours when ours w
 it is within 0.15 m + `--max-speed` (2.0 m/s) x the time since the anchor's detection (0.15 m when no motion step or
 strategy node ran then, or stopped within `--settle` s, 1.5, before: the robot stood; the settle window says only
 that it may move, it adds no distance), or when ours was unseen for 0.5 s or more, it reappears within `--reappear`
-m (0.5) of the anchor and no second robot of our colour and id was seen meanwhile. Anything else is "which robot is
-ours was lost": the session holds, alerts at once, and clears when ours is seen back at the anchor for `--clear` s,
-or through the identity probe.
+m (0.15) of the anchor and no second robot of our colour and id was seen meanwhile (on the field's camera most
+dropouts end within 0.15 m; a farther reappearance is settled by the probe). Anything else is "which robot is ours
+was lost": the session holds, alerts at once (adding, while probes are left, that the session will try to recognise
+it by a short turn on the spot), and clears when ours is seen back at the anchor for `--clear` s, or through the
+identity probe. When the lost alert went out, the recovery is an alert too ("our robot recognised by its turn at (x,
+y): the session resumes", "our robot seen again at its place (x, y): the session resumes"): a person on the way to
+the robot must know that it will move again.
 
 The identity probe: while identity is lost and exactly one robot of our colour and id is in view, standing still,
 with no other robot in our half or within 1 m of it, for `--clear` s, the supervisor runs two turns on the spot in a
 random order of signs (`characterize.py <team> spin <+-rate> <time>`, `--probe-rate` 1.5 rad/s, `--probe-time` 0.7
 s, 0.5 s apart), each watched. If the candidate's heading follows both turns (0.4 to 1.6 times the commanded angle,
-in the commanded direction) and it moves less than 0.10 m, it is ours: identity is anchored on it and a quiet notice
-is sent. Otherwise one alert says that the robot did not follow a commanded turn, the session holds, and that
-place is not probed again for 60 s. At most `--probes` (6) per session; `--probes 0` switches it off. A pure turn on
+in the commanded direction) and it moves less than 0.10 m, it is ours: identity is anchored on it (alerted as above, or a
+quiet notice when no lost alert went out). Otherwise one alert says that the robot did not follow a commanded turn,
+the session holds, and that place is not probed again for 60 s. A probe child that did not complete its turn (a
+non-zero exit, a result line marked interrupted or aborted, e.g. "robot not in vision") gives no verdict: no alert,
+no ban, the reason in the log (`probe_verdict`), the next probe not before 10 s. At most `--probes` (6) per session,
+those without a verdict included (the alert when none is left says how many gave no verdict and the last reason);
+`--probes 0` switches it off. A pure turn on
 the spot moves nobody across the field: if the candidate is another team's robot, ours only turns where it stands.
 `characterize.py spin` sends only an angular rate, never drives to a start pose, and uses its pose only to stop.
 
 A hold whose only cause was our robot not seen (the vision fresh throughout, no other robot in or near our half)
 ends once our robot has been seen again for `--clear-own` s (1.5); every other hold needs `--clear` s. Another robot
 counts from its second sighting by one camera within 0.25 s (any two frames: a robot detected in every other frame
-counts) and stays counted until its sighting expires (0.5 s); a sighting within 0.2 m of a recent one of another
+counts), or within 1 s when the second lies within 0.2 m + 2 m/s x the gap of the first (a robot detected only now
+and then), and stays counted until its sighting expires (0.5 s); a sighting within 0.2 m of a recent one of another
 colour or id counts at once (an id read differently from frame to frame), so only a single isolated detection is
-ignored. The robot the tools drive is compared with ours only while ours was detected within the last 0.1 s. If the
+ignored. The robot the tools drive is compared with ours only while ours was detected within the last 0.1 s. At
+start its heading on the page is compared with ours in the raw view as well: more than 0.5 rad apart (with the
+positions agreeing) refuses the start, naming `--vision-mirror`, since a wrong mirror setting flips y and the heading
+and lets the positions agree only near y = 0; when either heading is missing the check is skipped (logged). If the
 alert sender's thread has ended, "session ended" is sent once directly.
 
 `hq.py`, `auto_session.py` and `place_ball.py` share `procs.py`: the list of programs that command the robot (the
