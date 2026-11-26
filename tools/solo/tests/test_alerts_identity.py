@@ -414,3 +414,47 @@ def test_a_single_frame_sighting_counts_when_its_camera_sends_no_newer_frame_wit
     q.append((1, [("yellow", 5, 0.5, 0.5)])); single(); clk.t += 0.017; q.append((1, [("yellow", 5, 0.5, 0.5)]))
     assert ("yellow", 5) not in single()                                   # two consecutive frames
 
+
+
+# ---- 8. a robot detected in a flickering way
+def flicker_view(pattern, n=120):
+    """a RawVision fed n frames at 60 Hz, pattern(k) -> the robots of frame k; -> [(frame, colour + ids counted)]"""
+    clk = A.SimClock(); q = []
+    class Src:
+        def read(self, timeout): return q.pop(0) if q else None
+    v = A.RawVision(Src(), clk, thread=False); v.own = ("blue", 3); out = []
+    for k in range(n):
+        q.append((0, pattern(k))); sn = v.snapshot()
+        out.append((k, sorted({d[:2] for d in sn["vision_dets"] if d not in sn["vision_unconfirmed"] and d[0] != "blue"})))
+        clk.t += 1 / 60
+    return out
+
+def test_a_robot_seen_in_every_other_frame_is_counted_within_0_1_s_and_stays_counted():
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.5, 0.0)] if k >= 10 and k % 2 == 0 else []))
+    counted = [k for k, ids in out if ("yellow", 2) in ids]
+    assert counted[0] - 10 <= 6 and counted == list(range(counted[0], 120))
+
+def test_a_robot_whose_id_is_read_differently_frame_by_frame_is_counted():
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2 if k % 2 else 5, -0.5, 0.0)] if k >= 10 else []))
+    assert all(ids for k, ids in out if k >= 12)
+
+def test_one_isolated_false_detection_is_not_counted():
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2, 0.5, -0.5)] if k == 30 else []))
+    assert all(ids == [] for k, ids in out)
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.9, 0.1)] if k == 30 else []))    # next to ours: ours does not confirm it
+    assert all(ids == [] for k, ids in out)
+
+def test_a_confirmed_robot_missing_one_frame_stays_confirmed():
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.5, 0.0)] if k >= 10 and k != 40 else []))
+    assert all(ids == [("yellow", 2)] for k, ids in out if k >= 11)
+    out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.5, 0.0)] if 10 <= k < 20 or k >= 45 else []))   # 0.42 s gap: still kept
+    assert all(ids == [("yellow", 2)] for k, ids in out if k >= 11)
+
+def test_a_robot_seen_in_every_other_frame_stops_a_step():
+    T = {}
+    def frames(t):
+        k = round((t - T.get("at", 1e18)) * 60)
+        return {0: [OURS] + ([("yellow", 2, -0.5, 0.0)] if k >= 0 and k % 2 == 0 else [])}
+    s, run, note, world, clk = make_cams([SPIN(label="spin")], frames, budget=60, switch_after=0)
+    T["at"] = clk.t + 1.0; s.run()
+    assert run.stops and run.stops[0][1].startswith("another robot: yellow2") and run.stops[0][0] - T["at"] <= 0.2

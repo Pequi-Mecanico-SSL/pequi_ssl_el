@@ -98,8 +98,11 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   vision multicast itself (receive only: --vision GROUP:PORT, default 224.5.23.2:10006; --vision-iface ADDR, default
   $SOLO_IFACE or 0.0.0.0; --vision-mirror when the connector runs with mirror:=true) and sees every robot of both
   colours with its vision id; our robot is the detection of our colour and id within 0.25 m of the robot the tools
-  drive. A robot of another colour or id counts from its second consecutive frame of one camera (or when that camera
-  sends no newer frame within 0.1 s): a false detection or a misread id in a single frame stops nothing. Two
+  drive. A robot of another colour or id counts from its second sighting by one camera within 0.25 s (any two frames:
+  a robot detected in every other frame counts), and then until its sighting expires (0.5 s); a sighting within 0.2 m
+  of one of another colour or id of the last 0.25 s counts at once (an id read differently from frame to frame; our
+  robot's sightings do not confirm another), and so does one whose camera sends no newer frame within 0.1 s: a single
+  isolated false detection stops nothing. Two
   detections of one camera frame are always two robots; two cameras' detections of one colour + id are
   one robot when closer than 0.15 m plus 2 m/s per second of frame age difference (at most 0.35 m), or, for one its
   camera no longer sees, 3 m/s (at most 0.8 m). Every other detection is another robot. Our robot's last unambiguous
@@ -573,12 +576,17 @@ def frame_camera(w):
     """the camera id of a detection frame"""
     return int(w.detection.camera_id)
 
-def frame_robots(w, mirror=False):
+def frame_robots(w, mirror=False, heading=False):
     """a parsed SSL_WrapperPacket -> [(colour, vision id, x, y)] of its detection frame (metres; y flipped when the
-    connector runs with mirror:=true), None for a packet without a detection frame"""
+    connector runs with mirror:=true), None for a packet without a detection frame. heading: (colour, id, x, y, th),
+    th the detection's orientation (rad; negated with mirror) or None when the frame carries none"""
     if not w.HasField("detection"): return None
     s = -1.0 if mirror else 1.0
-    return [(col, int(r.robot_id), r.x / 1000.0, s * r.y / 1000.0)
+    def th(r):
+        try: ok = r.HasField("orientation")
+        except Exception: ok = hasattr(r, "orientation")
+        return s * float(r.orientation) if ok else None
+    return [(col, int(r.robot_id), r.x / 1000.0, s * r.y / 1000.0) + ((th(r),) if heading else ())
             for col, rs in (("blue", w.detection.robots_blue), ("yellow", w.detection.robots_yellow)) for r in rs]
 
 class McastSource:
@@ -602,7 +610,7 @@ class McastSource:
         w = self.pb.SSL_WrapperPacket()
         try: w.ParseFromString(self.s.recv(65535))
         except Exception: return None
-        rs = frame_robots(w, self.mirror)
+        rs = frame_robots(w, self.mirror, heading=True)
         return None if rs is None else (frame_camera(w), rs)
 
 MERGE_D = 0.15                      # m: two cameras' sightings of one colour + id closer than this are one robot (a robot is 0.18 m across)
@@ -637,18 +645,23 @@ def merge_dets(dets, flags=False):
 class RawVision:
     """the supervisor's own view of the robots: every robot of both colours with its vision id, from the packets of a
     source (McastSource, or a fake in tests), independent of the vision connector. A source yields (camera id,
-    robots) or robots (camera 0). Every detection is kept, two robots with the same colour + id included: per camera
-    and colour + id the sightings of the last frame that held that colour + id, kept `keep` s (a robot missed in a
-    frame or two is not gone). snapshot: cam_age {camera: age of its last detection frame}; vision_age: the age of the
-    stalest camera (listed in `cameras`, a camera never seen counting as never; without the list, the cameras seen so
-    far; a camera that sends without being listed is listed from then on, `unlisted` names it); vision_dets:
-    [(colour, id, x, y, age)] merged across cameras (merge_dets); vision_unconfirmed: those of vision_dets seen in a
-    single frame so far (confirmed: two consecutive frames of its camera, or no newer frame of that camera within
-    CONFIRM_S).
+    robots) or robots (camera 0) (a fake: (camera id, robots, frame time)), a robot (colour, id, x, y) or (colour, id, x, y, heading). Every detection is kept,
+    two robots with the same colour + id included: per camera and colour + id the sightings of the last frame that
+    held that colour + id, kept `keep` s (a robot missed in a frame or two is not gone). snapshot: cam_age {camera:
+    age of its last detection frame}; vision_age: the age of the stalest camera (listed in `cameras`, a camera never
+    seen counting as never; without the list, the cameras seen so far; a camera that sends without being listed is
+    listed from then on, `unlisted` names it); vision_dets: [(colour, id, x, y, age)] merged across cameras
+    (merge_dets); vision_unconfirmed: those of vision_dets not confirmed yet; vision_poses: [(colour, id, x, y,
+    heading, age)] of every kept sighting that carries a heading (not merged).
+    Confirmed: a colour + id of one camera seen twice within PAIR_S (in any two frames, not necessarily consecutive;
+    a robot detected in every other frame counts), and from then on until its sighting expires; or a sighting within
+    NEAR_D of a sighting of another colour + id of the last PAIR_S (a robot whose id is read differently from frame
+    to frame; the colour + id in `own`, our robot, does not confirm another); or one whose camera sends no newer
+    frame within CONFIRM_S. A single isolated sighting is not confirmed.
     thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
     def __init__(self, source, clock=time.time, keep=VISION_FRESH, thread=True, cameras=None):
         self.src, self.clock, self.keep = source, clock, keep; self.L = threading.Lock(); self.cam_t = {}; self.seen = {}
-        self.cameras = None if cameras is None else sorted(int(c) for c in cameras); self.unlisted = []
+        self.cameras = None if cameras is None else sorted(int(c) for c in cameras); self.unlisted = []; self.own = None
         self.halt = threading.Event(); self.threaded = thread
         if thread: threading.Thread(target=self._loop, daemon=True).start()
     def _loop(self):
@@ -657,18 +670,27 @@ class RawVision:
             except Exception: f = None; self.halt.wait(0.2)
             if f is not None: self.feed(f)
     CONFIRM_S = 0.1                     # s: a sighting of one frame counts when its camera sends no newer frame this long
+    PAIR_S = 0.25                       # s: two sightings of one colour + id within this confirm it
+    NEAR_D = 0.2                        # m: a sighting this close to a recent one of another colour + id is confirmed
     def feed(self, robots):
         t = self.clock(); cam = 0
+        if isinstance(robots, tuple) and len(robots) == 3 and isinstance(robots[1], list): cam, robots, t = robots   # a fake's frame time
         if isinstance(robots, tuple) and len(robots) == 2 and isinstance(robots[1], list): cam, robots = robots
         cam = int(cam); fr = {}
-        for col, i, x, y in robots: fr.setdefault((col, int(i)), []).append((float(x), float(y)))
+        for r in robots:
+            col, i, x, y = r[:4]; th = r[4] if len(r) > 4 and r[4] is not None else None
+            fr.setdefault((col, int(i)), []).append((float(x), float(y), None if th is None else float(th)))
         with self.L:
-            prev = self.cam_t.get(cam); self.cam_t[cam] = t
+            self.cam_t[cam] = t
             if self.cameras is not None and cam not in self.cameras:
                 self.cameras = sorted(self.cameras + [cam]); self.unlisted.append(cam)
+            recent = [(k2, ps2) for (c2, k2), (t2, ps2, _) in self.seen.items() if k2 != self.own and t - t2 <= self.PAIR_S]
             for k, ps in fr.items():
                 old = self.seen.get((cam, k))
-                self.seen[(cam, k)] = (t, ps, old[2] + 1 if old is not None and old[0] == prev else 1)    # consecutive frames
+                ok = old is not None and (t - old[0] <= self.PAIR_S or (old[2] and t - old[0] <= self.keep))
+                if not ok and k != self.own:
+                    ok = any(k2 != k and math.hypot(x - x2, y - y2) <= self.NEAR_D for k2, ps2 in recent for x2, y2, _ in ps2 for x, y, _ in ps)
+                self.seen[(cam, k)] = (t, ps, ok)
     def snapshot(self):
         if not self.threaded:
             for _ in range(1000):
@@ -679,13 +701,14 @@ class RawVision:
         with self.L:
             cam_age = {c: round(t - tt, 2) for c, tt in self.cam_t.items()}
             cams = self.cameras if self.cameras is not None else sorted(cam_age)
+            live = [(c, k, tt, ps, ok) for (c, k), (tt, ps, ok) in self.seen.items() if t - tt <= self.keep]
             dets = [(k[0], k[1], x, y, round(t - tt, 2), c, self.cam_t[c] > tt,
-                     n >= 2 or (self.cam_t[c] == tt and t - tt >= self.CONFIRM_S - 1e-9))
-                    for (c, k), (tt, ps, n) in self.seen.items() if t - tt <= self.keep for x, y in ps]
+                     ok or (self.cam_t[c] == tt and t - tt >= self.CONFIRM_S - 1e-9)) for c, k, tt, ps, ok in live for x, y, _ in ps]
+            poses = [(k[0], k[1], x, y, th, round(t - tt, 3)) for c, k, tt, ps, ok in live for x, y, th in ps if th is not None]
             unlisted = list(self.unlisted)
         ages = [cam_age.get(c, 1e9) for c in cams]; merged = merge_dets(dets, flags=True)
         return dict(vision_age=max(ages) if ages else 1e9, cam_age=cam_age, vision_dets=[d for d, ok in merged],
-                    vision_unconfirmed=[d for d, ok in merged if not ok], unlisted=unlisted)
+                    vision_unconfirmed=[d for d, ok in merged if not ok], vision_poses=poses, unlisted=unlisted)
 
 def open_vision(group=VISION_GROUP, port=VISION_PORT, iface="0.0.0.0", mirror=False, cameras=None):
     """-> (RawVision, None) or (None, why it cannot be opened)"""
@@ -1038,6 +1061,8 @@ class Session:
         self.robot_fresh, self.info_alert, self.fetch_limit = robot_fresh, info_alert, fetch_limit; self.not_ours = None
         self.team = team; self.steps = steps; self.head = head or {}; self.vs = vs or dict(TEAM=team, T=HERE, SOLO_DATA=data_dir())
         self.world = world; self.runner = runner; self.notifier = notifier; self.procs = procs; self.strat = strategy
+        v = getattr(world, "vision", None)
+        if isinstance(v, RawVision) and self.our_id is not None: v.own = (team, self.our_id)   # ours does not confirm another robot
         self.clock, self.sleep = clock, sleep; self.py = python; self.echo = echo
         self.ball_lost, self.robot_lost, self.robot_wait, self.busy_wait = ball_lost, robot_lost, robot_wait, busy_wait
         self.realert, self.max_alerts = realert, max_alerts
@@ -1176,7 +1201,7 @@ class Session:
         """the world's snapshot; with a home area every detection of the raw vision view is another robot except ours:
         the one of our colour + id within MATCH_D of the robot the tools drive (the page's), or, while the page's robot
         is not fresh, the only one of our colour + id. A robot of another colour or id seen in a single frame so far
-        (vision_unconfirmed) is left out of others. Any other copy of our colour + id is another robot; when it
+        (vision_unconfirmed: RawVision's confirmation rule) is left out of others. Any other copy of our colour + id is another robot; when it
         cannot be told which one is ours, us_ambiguous says why (no information). raw_us: ours, (x, y, age) or None.
         twins: [(x, y)] of every robot seen as our colour + id when there are two or more (no information: the
         connector may follow either). A camera that sends without being listed is listed from then on (logged once).
@@ -1208,7 +1233,7 @@ class Session:
             us, s["us_lost"] = self.track_us(mine, us, amb)
             s["raw_us"] = (us[2], us[3], us[4]) if us is not None else None; s["us_ambiguous"] = amb
             s["twins"] = [(round(d[2], 2), round(d[3], 2)) for d in sorted(mine, key=lambda d: (d[2], d[3]))] if len(mine) > 1 else []
-            single = s.get("vision_unconfirmed") or []             # another robot counts from its second frame
+            single = s.get("vision_unconfirmed") or []             # another robot counts once confirmed (RawVision)
             s["others"] = [(f"{c}{i}", x, y) for c, i, x, y, a in sorted(d for d in dets if d is not us and ((d[0], int(d[1])) == me or d not in single))]
         return s
     ID_TIGHT = 0.15                     # m: how far our robot may seem to move while it stands (detection noise)

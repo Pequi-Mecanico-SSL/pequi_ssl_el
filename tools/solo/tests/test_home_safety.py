@@ -13,13 +13,17 @@ from test_home_area import HOME, SPIN, make, alerts, far_intruder  # noqa: E402
 
 
 class Cams:
-    """a fake vision source of several cameras: frames(t) -> {camera: [(colour, id, x, y)]} (a camera missing from
-    the dict sends nothing); every camera sends one frame per 1/60 s"""
+    """a fake vision source of several cameras: frames(t) -> {camera: [(colour, id, x, y[, heading])]} (a camera
+    missing from the dict sends nothing); every camera sends one frame per 1/60 s: a read delivers the frames due
+    since the last one (at most the last BACKLOG s of them), each with its own time"""
+    BACKLOG = 0.3
     def __init__(self, clk, frames):
         self.clk, self.frames, self.last, self.q = clk, frames, -1e9, []
     def read(self, timeout):
-        if not self.q and self.clk.t - self.last >= 1 / 60 - 1e-9:
-            self.last = self.clk.t; self.q = sorted(self.frames(self.clk.t).items())
+        if not self.q:
+            t = max(self.last + 1 / 60, self.clk.t - self.BACKLOG)
+            while t <= self.clk.t + 1e-9:
+                self.last = t; self.q += [(c, rs, t) for c, rs in sorted(self.frames(t).items())]; t += 1 / 60
         return self.q.pop(0) if self.q else None
 
 def make_cams(steps, frames, cameras=(0,), robot=(-1.0, 0.0, 0.0), budget=300.0, **kw):
