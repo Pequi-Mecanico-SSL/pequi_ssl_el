@@ -370,7 +370,7 @@ def test_an_intruder_crossing_in_and_out_is_alerted_at_once_then_after_60_s_with
     a = [m for m in alerts(note) if "entered our half" in m]
     assert len(a) == 2 and len(s.intrusions) >= 6 and a[-1].endswith(")") and " (3 more times since the alert at " in a[-1]
 
-def test_a_camera_silent_again_for_good_is_alerted_again_once_its_backoff_has_passed():
+def test_a_camera_silent_again_for_good_is_alerted_again_once_it_has_lasted_20_s_within_its_backoff():
     t = {}
     def frames(now):                                    # camera 1 silent 12 s, back, then silent for good from 25 s
         dt = now - t["0"]
@@ -378,8 +378,10 @@ def test_a_camera_silent_again_for_good_is_alerted_again_once_its_backoff_has_pa
     s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(6)], frames, cameras=(0, 1), budget=600, switch_after=0)
     t["0"] = clk.t; rec = timed(s, clk); s.run()
     nv = [(dt, m) for dt, k, m in rec if k == "alert" and m.startswith("no vision for")]
-    assert len(nv) >= 2 and nv[0][0] <= 2.6 + 10 + 0.5 and 60 - 0.3 <= nv[1][0] - nv[0][0] <= 60 + 0.5
-    assert "(camera 1)" in nv[1][1] and "more time" not in nv[1][1]
+    assert len(nv) >= 2 and nv[0][0] <= 2.6 + 10 + 0.5 and nv[1][0] - nv[0][0] < 60      # within the 60 s backoff
+    assert nv[1][1].startswith("no vision for 20.") and "(camera 1)" in nv[1][1] and "more time" not in nv[1][1]
+    held = [dt for dt, k, m in rec if k == "alert" and m.startswith("the session has held for")]
+    assert held and nv[0][0] < held[0] < nv[1][0]                       # the hold as a whole, not skipped meanwhile
 
 def test_another_robot_entering_after_one_that_crossed_is_alerted_at_once():
     tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (30.0, dict(others=[("blue5", -1.8, -1.0)]))]
@@ -388,12 +390,14 @@ def test_another_robot_entering_after_one_that_crossed_is_alerted_at_once():
     b5 = [(dt, m) for dt, k, m in rec if k == "alert" and "(blue 5)" in m]
     assert b5[0][0] <= 30.0 + 0.3 and b5[0][1].startswith("another robot (blue 5) entered our half at (-1.80, -1.00)")
 
-def test_the_same_robot_back_and_staying_is_alerted_again_once_its_backoff_has_passed():
+def test_the_same_robot_back_and_staying_is_alerted_again_once_it_has_lasted_20_s_within_its_backoff():
     tl = [(2.0, dict(others=[("yellow2", -0.6, 0.3)])), (3.0, dict(others=[])), (20.0, dict(others=[("yellow2", -1.8, 1.0)]))]
     s, run, note, world, strat, clk = make([SPIN(label=f"s{k}") for k in range(3)], timeline=tl, budget=100, switch_after=0)
     rec = timed(s, clk); s.run()
-    y2 = [dt for dt, k, m in rec if k == "alert" and "(yellow 2) entered" in m]
-    assert len(y2) == 2 and y2[0] <= 2.2 and 60 - 0.3 <= y2[1] - y2[0] <= 60 + 0.5
+    y2 = [dt for dt, k, m in rec if k == "alert" and m.startswith("another robot (yellow 2) entered")]
+    held = [dt for dt, k, m in rec if k == "alert" and m.startswith("the session has held for")]
+    assert len(y2) == 2 and y2[0] <= 2.2 and 20 + 20 <= y2[1] < 2.2 + 60                  # lasting 20 s, within its backoff
+    assert held and held[0] <= 20 + 10 + 0.5 and y2[1] - held[0] >= A.Session.ALERT_FLOOR - 0.1   # the floor still spaces them
 
 def test_a_hold_under_information_that_comes_and_goes_alerts_and_reminds():
     t = {}

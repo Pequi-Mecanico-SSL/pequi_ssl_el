@@ -3,7 +3,7 @@ out, the wait before the drive back, failed alerts retried and a dead alert chan
 the list and the merge allowance. Fakes for the field (no robot, ROS or network); the stop test starts a local
 `sleep` child.
     uv run --with pytest pytest -q tools/solo/tests/test_alerts_identity.py"""
-import os, sys, threading, time
+import math, os, sys, threading, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE)); sys.path.insert(0, HERE)
 import auto_session as A  # noqa: E402
@@ -74,7 +74,7 @@ def test_a_twin_left_alone_after_our_tag_drops_out_holds_without_clearing_and_sa
     lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
     assert len(starts) == 1 and s.done == [] and not s.not_ours           # nothing ran after the twin came in
     assert lost and "after two robots were seen as ours, the one left is blue 3 at (-0.60, +0.40)" in lost[0]
-    assert lost[0].endswith("; the session holds") and s.ours_lost is not None
+    assert lost[0].endswith("; the session holds: put the robot back at (-1.00, +0.00) or restart the session") and s.ours_lost is not None
 
 def test_which_robot_is_ours_clears_only_when_ours_is_seen_again_at_its_old_place():
     s, run, note, starts = swap_session(back=60, back_at=(-0.6, 0.0))      # one robot, 0.4 m from where ours stood
@@ -89,6 +89,115 @@ def test_our_robot_seen_continuously_while_a_step_moves_it_is_not_lost():
     s.run()
     assert s.ours_lost is None and s.done == [1] and alerts(note) == []
 
+
+
+# ---- 2b. ordinary dropouts and stops at speed on a clean field: our robot is not lost
+REACT, DECEL = 0.15, 3.0                    # s, m/s^2: the simulated robot after a stop (reaction delay, then braking)
+START, GOAL = (-2.0, -1.2), (-0.5, 1.2)
+
+def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps=None, script=None, budget=300):
+    """a goto from START to GOAL at speed (m/s), then a spin. drop (at, dur): from `at` s our robot's tag is not
+    detected for dur s (the connector does not see it either: the page keeps its last position). others(dt) -> robots
+    seen besides ours. -> (session, runner, notifier, clock, step starts, [(distance from the kept position, allowed)])"""
+    D = {}
+    def frames(t):
+        dt = t - D["t0"]; rs = []
+        if drop is None or not (drop[0] <= dt < drop[0] + drop[1]): rs.append(("blue", 3, *world.robot[:2]))
+        return {0: rs + (others(dt) if others else [])}
+    s, run, note, world, clk = make_cams(steps or [dict(kind="goto", x=GOAL[0], y=GOAL[1], label="g"), SPIN(label="after")], frames,
+                                         robot=(*START, 0.0), budget=budget, switch_after=0)
+    dist = math.hypot(GOAL[0] - START[0], GOAL[1] - START[1])
+    run.SPEED, run.REACT, run.DECEL = speed, react, decel
+    run.script = script if script is not None else [dict(match="goto.py", line="arrived: robot at (-0.50, +1.20)", dur=dist / speed,
+                                                         world={"robot": (*GOAL, 0.0)})]
+    snap0 = world.snapshot; F = {}
+    def snap():
+        d = snap0()
+        if drop is not None and drop[0] <= clk.t - D["t0"] < drop[0] + drop[1]:
+            F.setdefault("p", (d["robot"], clk.t)); d["robot"] = F["p"][0]; d["robot_age"] = round(clk.t - F["p"][1], 2)
+        else: F.clear()
+        return d
+    world.snapshot = snap
+    checks = []; tr = s.track_us
+    def track(mine, us, amb):
+        if s.ours_lost is None and us is not None and len(mine) == 1 and amb is None and s.us_last is not None:
+            checks.append((math.hypot(us[2] - s.us_last["x"], us[3] - s.us_last["y"]), s.id_bound(clk.t)))
+        return tr(mine, us, amb)
+    s.track_us = track
+    D["t0"] = clk.t; starts = []; go = run.run
+    run.run = lambda *a, **k: (starts.append(round(clk.t - D["t0"], 2)), go(*a, **k))[1]
+    s.run()
+    return s, run, note, clk, starts, checks
+
+def test_a_dropout_or_a_stop_at_speed_on_a_clean_field_does_not_lose_our_robot():
+    cases = {"0.3 s at 1.5 m/s": (1.5, (1.0, 0.3)), "0.45 s at 1.0 m/s": (1.0, (1.0, 0.45)),
+             "1.0 s at 1.0 m/s": (1.0, (1.0, 1.0)), "1.0 s at 0.5 m/s": (0.5, (1.0, 1.0))}
+    for name, (v, drop) in cases.items():
+        s, run, note, clk, starts, checks = clean_session(v, drop)
+        assert s.ours_lost is None and not s.not_ours and s.done == [1, 2], (name, s.done, run.stops)
+        assert not [m for m in alerts(note) if "which robot is ours" in m], name
+        assert all(d <= lim for d, lim in checks), name
+        if drop[1] >= 1.0:                                  # longer than the raw view keeps a detection: stopped, then repeated
+            assert run.stops and run.stops[0][1].startswith("no information: our robot (blue 3) not seen") and len(starts) == 3, name
+        else: assert run.stops == [] and len(starts) == 2, name
+
+def test_our_robot_sliding_after_an_intruder_stops_a_fast_drive_is_not_lost_and_the_session_goes_on():
+    for react, decel in ((0.0, 5.0), (0.1, 4.0), (REACT, DECEL)):     # slides of 0.23, 0.43 and 0.60 m from 1.5 m/s
+        other = lambda dt: [("yellow", 1, -1.9, 1.2)] if 1.0 <= dt < 4.0 else []
+        s, run, note, clk, starts, checks = clean_session(1.5, others=other, react=react, decel=decel)
+        assert run.stops and run.stops[0][1].startswith("another robot: yellow1"), (react, decel)
+        assert s.ours_lost is None and not s.not_ours and s.done == [1, 2] and len(starts) == 3, (react, decel, run.stops)
+        assert not [m for m in alerts(note) if "which robot is ours" in m] and all(d <= lim for d, lim in checks)
+
+def test_a_3_s_dropout_during_a_strategy_step_does_not_lose_our_robot():
+    st = dict(kind="strategy", on=True, seconds=6, side="negative", label="play")
+    s0 = {}
+    def drive(s, clk, world, v=1.0):                     # the node drives our robot along +y while it runs
+        sl = s.sleep
+        def sleep(dt):
+            was = s.strat.running(); t = clk.t; sl(dt)
+            if was and s.strat.running():
+                x, y, th = world.robot; world.set(robot=(x, min(1.2, y + v * (clk.t - t)), th))
+            elif was and not s.strat.running(): world.coast((0.0, v), REACT, DECEL)
+        s.sleep = sleep
+    D = {}
+    def frames(t):
+        dt = t - D["t0"]; return {0: [] if 1.0 <= dt < 4.0 else [("blue", 3, *world.robot[:2])]}
+    s, run, note, world, clk = make_cams([st, SPIN(label="after")], frames, robot=(-1.6, -1.2, 0.0), budget=200, switch_after=0)
+    snap0 = world.snapshot; F = {}
+    def snap():
+        d = snap0()
+        if 1.0 <= clk.t - D["t0"] < 4.0:
+            F.setdefault("p", (d["robot"], clk.t)); d["robot"] = F["p"][0]; d["robot_age"] = round(clk.t - F["p"][1], 2)
+        else: F.clear()
+        return d
+    world.snapshot = snap; drive(s, clk, world); D["t0"] = clk.t
+    s.run()
+    assert s.ours_lost is None and not s.not_ours and 2 in s.done
+    assert not [m for m in alerts(note) if "which robot is ours" in m]
+
+def test_our_robot_standing_its_tag_dropping_out_and_a_robot_of_our_colour_and_id_seen_0_4_m_away_is_lost():
+    D = {}
+    def frames(t):
+        dt = t - D["t0"]
+        if dt >= 12: world.set(robot=(-0.6, 0.0, 0.0)); return {0: [("blue", 3, -0.6, 0.0), ("yellow", 2, -1.8, 1.0)]}
+        return {0: [OURS] + ([("yellow", 2, -1.8, 1.0)] if dt >= 2 else [])}
+    s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")], frames, budget=60, switch_after=0)
+    D["t0"] = clk.t; s.run()
+    lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
+    assert s.ours_lost is not None and s.done == [] and lost and "0.40 m from where ours last stood" in lost[0]
+    assert lost[0].endswith("put the robot back at (-1.00, +0.00) or restart the session")
+
+def test_our_robot_carried_1_m_away_while_the_session_holds_is_lost():
+    D = {}
+    def frames(t):
+        dt = t - D["t0"]; y2 = [("yellow", 2, -1.8, 1.0)] if dt >= 2 else []
+        if 10 <= dt < 12: return {0: y2}                                         # lifted: not seen
+        if dt >= 12: world.set(robot=(-1.0, -1.0, 0.0)); return {0: [("blue", 3, -1.0, -1.0)] + y2}
+        return {0: [OURS] + y2}
+    s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")], frames, budget=60, switch_after=0)
+    D["t0"] = clk.t; s.run()
+    assert s.ours_lost is not None and s.done == [] and any(m.startswith("which robot is ours was lost") for m in alerts(note))
 
 # ---- 3. the wait before the drive back names its reason and where our robot stands
 OUT = ("blue", 3, 0.5, 0.0)                                                # outside the home area (x > -0.10)
@@ -115,15 +224,60 @@ def test_the_wait_before_the_drive_back_alerts_with_its_reason_and_where_our_rob
     s.ensure_home_clear()                                                  # a hold alert while our robot is outside
     assert alerts(note)[0].endswith("which is ours, our robot at (+0.50, +0.00), outside our half; the session holds")
 
-def test_the_drive_back_alert_waits_the_information_delay_or_fetch_wait():
-    for frames, after in ((lambda t: {0: [OUT, ("yellow", 2, -1.8, 1.0)]}, 10), (lambda t: {0: [OUT, ("yellow", 1, 0.15, 0.3)]}, 60)):
+def test_the_drive_back_alert_waits_the_information_delay_or_fetch_wait_and_a_robot_inside_our_half_goes_out_at_once():
+    for frames, after in ((lambda t: {0: [OUT, ("yellow", 2, -1.8, 1.0)]}, 0), (lambda t: {0: [OUT, ("yellow", 1, 0.15, 0.3)]}, 60),
+                          (lambda t: {} , 10)):
         s, run, note, world, clk = make_cams([SPIN()], frames, robot=(0.5, 0.0, 0.0), budget=200, switch_after=0)
         t = []; log = s.log
         s.log = lambda kind, **k: (t.append(clk.t) if kind == "alert" and "outside our half" in k.get("message", "") else None, log(kind, **k))[1]
         s.ensure_home_clear = lambda inside_only=False: True             # the hold before the wait is tested elsewhere
         t0 = clk.t; s.drive_home(s.look(), "return_home")
-        assert t and after - 0.1 <= t[0] - t0 <= after + 0.6
+        assert t and max(0, after - 0.1) <= t[0] - t0 <= after + 0.6, after
 
+
+def test_a_robot_entering_our_half_while_our_robot_waits_outside_is_alerted_at_once():
+    T = {}
+    def frames(t):
+        rs = [OUT, ("yellow", 1, 0.15, 0.3)]                               # blocks the way back the whole time
+        if t - T.get("0", t) >= 70: rs.append(("yellow", 4, -1.0, 0.5))           # a new robot enters our half at 70 s and stays
+        return {0: rs}
+    s, run, note, world, clk = make_cams([SPIN()], frames, robot=(0.5, 0.0, 0.0), budget=600, switch_after=0)
+    assert s.preflight() is None
+    T["0"] = clk.t; rec = []; log = s.log
+    s.log = lambda kind, **k: (rec.append((clk.t - T["0"], k.get("message", ""))) if kind == "alert" else None, log(kind, **k))[1]
+    s.ensure_home_clear = lambda inside_only=False: True
+    assert s.drive_home(s.look(), "return_home") is False
+    y4 = [(t, m) for t, m in rec if "(yellow 4) entered our half" in m]
+    assert rec[0][1].startswith("another robot (yellow 1 at (+0.15, +0.30)) blocks the way back") and 59.9 <= rec[0][0] <= 60.6
+    assert y4 and 70 <= y4[0][0] <= 70.6 and y4[0][1] == ("another robot (yellow 4) entered our half at (-1.00, +0.50); our robot at "
+                                                        "(+0.50, +0.00), outside our half: the session waits")
+
+def test_which_robot_is_ours_lost_while_our_robot_waits_outside_is_alerted_at_once():
+    T = {}
+    def frames(t):
+        if t - T.get("0", t) >= 30: world.set(robot=(0.9, 0.0, 0.0)); return {0: [("blue", 3, 0.9, 0.0), ("yellow", 1, 0.15, 0.3)]}
+        if t - T.get("0", t) >= 28: return {0: [("yellow", 1, 0.15, 0.3)]}
+        return {0: [OUT, ("yellow", 1, 0.15, 0.3)]}
+    s, run, note, world, clk = make_cams([SPIN()], frames, robot=(0.5, 0.0, 0.0), budget=200, switch_after=0)
+    assert s.preflight() is None
+    T["0"] = clk.t; rec = []; log = s.log
+    s.log = lambda kind, **k: (rec.append((clk.t - T["0"], k.get("message", ""))) if kind == "alert" else None, log(kind, **k))[1]
+    s.ensure_home_clear = lambda inside_only=False: True
+    s.drive_home(s.look(), "return_home")
+    lost = [(t, m) for t, m in rec if m.startswith("which robot is ours was lost")]
+    assert lost and 30 <= lost[0][0] <= 30.6 and lost[0][1].endswith(
+        "; our robot at (+0.50, +0.00), outside our half: the session waits; put the robot back at (+0.50, +0.00) or restart the session")
+
+def test_session_ended_says_it_ended_holding_since_when_for_what_and_where_our_robot_stands():
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OUT, ("yellow", 2, -1.8, 1.0)]}, robot=(0.5, 0.0, 0.0), budget=60, switch_after=0)
+    t0 = clk.t; s.run()
+    end = [m for m in note.sent if m.startswith("session ended")][-1]
+    since = A.time.strftime("%H:%M", A.time.localtime(t0))
+    assert (f"; ended while holding since {since}: another robot (yellow 2) entered our half at (-1.80, +1.00)"
+            ", our robot at (+0.50, +0.00), outside our half") in end
+    s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=60, switch_after=0)
+    s.run()
+    assert "holding" not in [m for m in note.sent if m.startswith("session ended")][-1]
 
 # ---- 4. a failed alert does not count as sent
 def test_failed_alerts_are_retried_in_order_and_motion_holds_once_none_was_delivered_for_alert_dead():
