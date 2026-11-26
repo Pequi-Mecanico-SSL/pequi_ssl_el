@@ -7,6 +7,8 @@ export PYTHONPATH=$PYTHONPATH:$_solo_repo/../ssl-rules/src     # the rules packa
 unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT ROS_LOCALHOST_ONLY   # discovery-server settings a shell profile may carry
 # default 77, the same default as tools/solo/robot_stack.sh, so that both sides meet on one ROS domain
 export ROS_DOMAIN_ID=${SOLO_DOMAIN:-77}
+# the vision coverage map module solo_node's recovery imports (its recover_map_module parameter defaults to this)
+export SOLO_VISION_MAP_MODULE=${SOLO_VISION_MAP_MODULE:-$_solo_repo/tools/solo/vision_map.py}
 # SOLO_IFACE=<this machine's address on the robot's network>: announce and use only that address for DDS. A machine
 # with many interfaces (bridges, VPN, a second address on one port) announces every address, and a peer that keeps
 # only the first few never learns the one it can reach: topics are listed but no data arrives.

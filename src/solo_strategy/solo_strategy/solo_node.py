@@ -19,11 +19,30 @@ Safety: zero velocity when the server does not answer, in HALT, and when our rob
         blind_floor at blind_limit s, and from blind_limit on the command is zero. Their robots stay in the world for
         opp_hold s after their last sighting (moved on with their velocity for at most 0.1 s), and with ball_coast > 0
         (default 0) a ball unseen for under 0.2 s is moved on with its velocity for at most ball_coast s.
+Recovery (recover true; default false, and then nothing of it runs and no robot topic is subscribed): when our robot
+    has not been seen for blind_limit s (predict true) or pose_timeout s (predict false), it is driven at recover_speed (ramped at recover_accel, w = 0) towards
+    a place the camera sees (recover.py: the vision map's nearest good point, else 0.5 m inside the nearest field line,
+    never inside their defense area), steered by odometry (odometry.py), until vision has had it for recover_frames detections in a row. It stands
+    still after recover_time s or recover_dist m of odometry travel, always in HALT / TIMEOUT (whatever recover_states holds), when the odometry (/solo/odom or
+    /wheels/state) is older than recover_stale s, in any state not in recover_states (default STOP, RUNNING, FREE_KICK, KICKOFF, PENALTY),
+    when its odometry has disagreed with vision, and when vision sees nothing at all (no ball, no other robot); in STOP its speed is at most recover_stop_speed.
+    recover_source robot (default): the robot integrates its own wheels and gyro (tools/solo/onboard_odom.py) and this
+    node subscribes only to its /solo/odom (geometry_msgs/Pose2D, odom frame, 30 Hz, best effort; odom_topic), taken
+    odom_robot_lag s old on arrival. recover_source laptop: /wheels/state here (best effort; odom_wheel_lag), and the
+    gyro from /imu only with recover_gyro true. Either way the odometry pose of 0.1 s (odom_latency) before each vision
+    pose is paired with it (laptop receive times only), and the debug line carries odom_src and odom_age.
+    Vision map: recover_map_module is the path of this repository's tools/solo/vision_map.py (default: the environment
+    variable SOLO_VISION_MAP_MODULE, which tools/solo/env.sh sets; an installed package cannot locate the repository by
+    itself), recover_map the map file (empty: that module's default, $SOLO_DATA/vision_map/map.npz, SOLO_DATA default
+    log/solo in the repository). Without a module or a map the targets are the field-line ones.
+    The recovery is off by default (recover:=false) and has been checked offline on recorded data only, not yet on the
+    robot.
 Without a referee on the network the robot stands still, unless force_state names a state (running, stop, halt): that is
 for tests and for a field without a game controller.
 side: which half we defend: auto (from the referee), negative or positive (field x)."""
 import json
 import math
+import os
 import socket
 import time
 
@@ -32,8 +51,11 @@ from geometry_msgs.msg import Pose2D, Twist
 from pequi_msgs.msg import GameState
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import String
 
+from solo_strategy.odometry import Odometry
+from solo_strategy.recover import Recovery, load_map
 from solo_strategy.tracking import DeadReckoning, Track, wrap
 
 HALT, STOP, RUNNING, FREE_KICK, KICKOFF, PENALTY = 1, 2, 3, 4, 5, 6
@@ -54,6 +76,13 @@ class SoloNode(Node):
         d('speed_cap', 1.0); d('angular_cap', 4.0); d('ramp_fwd', 1.7); d('ramp_side', 1.5); d('side', 'auto'); d('force_state', ''); d('server_port', 47001); d('cmd_reliable', False)
         d('vision_prefix', '/vision/poses')
         d('foe_all', False)                                        # shared test field: every robot but ours counts as one of theirs
+        d('recover', False); d('recover_speed', 0.4); d('recover_accel', 0.5); d('recover_time', 6.0); d('recover_dist', 2.5)
+        d('recover_frames', 5); d('recover_stop_speed', 0.6); d('recover_stale', 0.3); d('recover_gyro', False)
+        d('recover_map', '')                                       # empty: the map module's default ($SOLO_DATA/vision_map/map.npz)
+        d('recover_map_module', os.environ.get('SOLO_VISION_MAP_MODULE', ''))   # tools/solo/vision_map.py; empty: no map
+        d('recover_min_rate', 0.9); d('recover_min_evidence', 30.0); d('odom_latency', 0.1); d('odom_wheel_lag', 0.02)
+        d('wheels_topic', '/wheels/state'); d('imu_topic', '/imu'); d('recover_states', [2, 3, 4, 5, 6])
+        d('recover_source', 'robot'); d('odom_topic', '/solo/odom'); d('odom_robot_lag', 0.04)
         g = lambda n: self.get_parameter(n).value
         self.team = g('team')
         self.other = 'yellow' if self.team == 'blue' else 'blue'
@@ -96,6 +125,31 @@ class SoloNode(Node):
                                      lambda m, i=i: self.opp[i].add(self.now(), m.x, m.y, m.theta), 10)
         self.create_subscription(Pose2D, f'{vp}/ball', lambda m: self.ball.add(self.now(), m.x, m.y), 10)
         self.create_subscription(GameState, '/referee/game_state', self.on_game_state, 10)
+        self.recover = bool(g('recover'))
+        self.seen_run, self.last_vis_t = 0, -1.0
+        if self.recover:
+            self.odom_src = str(g('recover_source'))
+            if self.odom_src not in ('robot', 'laptop'):
+                raise ValueError(f"recover_source must be robot or laptop, not {self.odom_src!r}")
+            lag = float(g('odom_robot_lag')) if self.odom_src == 'robot' else float(g('odom_wheel_lag'))
+            self.odom = Odometry(vis_latency=float(g('odom_latency')), wheel_lag=lag)
+            vmap = load_map(g('recover_map_module'), g('recover_map'))
+            self.rec = Recovery(speed=float(g('recover_speed')), accel=float(g('recover_accel')), max_time=float(g('recover_time')),
+                                max_dist=float(g('recover_dist')), frames=int(g('recover_frames')), stop_speed=float(g('recover_stop_speed')),
+                                min_rate=float(g('recover_min_rate')), min_evidence=float(g('recover_min_evidence')), vmap=vmap,
+                                states=tuple(int(v) for v in g('recover_states')))
+            self.recover_stale = float(g('recover_stale'))
+            if self.odom_src == 'robot':
+                self.create_subscription(Pose2D, g('odom_topic'), lambda m: self.odom.robot_pose(self.now(), m.x, m.y, m.theta), qos_profile_sensor_data)
+                src = f"the robot's own {g('odom_topic')}"
+            else:
+                self.create_subscription(JointState, g('wheels_topic'), lambda m: self.odom.wheels(self.now(), list(m.position)), qos_profile_sensor_data)
+                if bool(g('recover_gyro')):
+                    self.create_subscription(Imu, g('imu_topic'), lambda m: self.odom.gyro(self.now(), m.angular_velocity.z), qos_profile_sensor_data)
+                src = f"{g('wheels_topic')}{' + ' + g('imu_topic') if g('recover_gyro') else ''} on the laptop"
+            self.get_logger().info(f"recovery on: {self.rec.speed} m/s, {self.rec.max_time} s / {self.rec.max_dist} m at most, "
+                                   f"odometry from {src}, "
+                                   f"vision map {'loaded' if vmap is not None else 'not available: field-line targets'}")
         self.create_timer(1.0 / float(g('rate_hz')), self.tick)
         self.get_logger().info(f'solo strategy up: team {self.team}, robot index {idx}, commands on {topic}, side {self.side}, '
                                f'force_state {self.force_state or "-"}, speed cap {self.speed_cap} m/s, ramp {self.ramp[0]} / {self.ramp[1]} m/s2, '
@@ -106,6 +160,10 @@ class SoloNode(Node):
         t = self.now()
         self.us.add(t, m.x, m.y, m.theta)
         self.dr.observe(t, m.x, m.y, m.theta, *self.us.vel)
+        if self.recover:
+            self.odom.anchor(t, m.x, m.y, m.theta)
+            self.seen_run = self.seen_run + 1 if t - self.last_vis_t < 0.1 else 1
+            self.last_vis_t = t
 
     def now(self):
         return time.monotonic() - self.t0
@@ -125,6 +183,8 @@ class SoloNode(Node):
             self.mode = info['mode']
             self.get_logger().info(f"mode: {self.mode}")
         if self.n % 6 == 0:
+            if self.recover:
+                self._odom_debug(now, info)
             self.dbg.publish(String(data=json.dumps(info)))
 
     def _ramp(self, prev, tgt, a):
@@ -202,6 +262,10 @@ class SoloNode(Node):
         if len(opp) > 3:                                           # the policy takes three: those nearest the ball
             opp.sort(key=lambda o: math.hypot(sx * bx - o[0], by - o[1]))
             opp = opp[:3]
+        if self.recover:
+            self.rec.reacquired(self.seen_run if now - self.last_vis_t < 0.1 else 0)
+            if (not us_seen or self.rec.active) and self.us.q:
+                return self._recover(now, out, state, 1.0 if mirror else -1.0, age)
         if not us_seen:
             return dict(mode='our robot is not in vision: standing still', t=round(now, 2), state=state, unseen=round(min(age, 99.0), 2))
         if not ball_seen:
@@ -252,6 +316,27 @@ class SoloNode(Node):
                     mirror=mirror, us=[round(v, 3) for v in (x, y, th)], ball=[round(bx, 3), round(by, 3)], opp=len(opp),
                     v_field=[round(vfx, 2), round(vfy, 2)], v_body=[round(bx, 2), round(by, 2)], w=round(out.angular.z, 2), cmd_age=round(now - self.cmd_t, 1), ms=r.get('ms'),
                     unseen=round(age, 3), scale=round(scale, 2))
+
+    def _recover(self, now, out, state, own_sign, age):
+        pose = self.odom.pose(now)
+        (vfx, vfy), info = self.rec.step(now, pose, self.us.q[-1][1:3], state, own_sign, self.odom.stale(now, self.recover_stale), self.dt,
+                                         odom_bad=not self.odom.healthy(),
+                                         vision_down=all(tr.age(now) > 0.3 for tr in self.opp + [self.ball]))
+        if pose is not None and (vfx or vfy):
+            c, s = math.cos(pose[2]), math.sin(pose[2])
+            out.linear.x, out.linear.y = c * vfx + s * vfy, -s * vfx + c * vfy
+            self.last_vf = (vfx, vfy)
+        self.last_w = 0.0
+        info.update(t=round(now, 2), state=state, unseen=round(min(age, 99.0), 2),
+                    v_body=[round(out.linear.x, 2), round(out.linear.y, 2)], odom_resets=self.odom.resets,
+                    odom_check=None if self.odom.qual is None else round(self.odom.qual, 2))
+        return info
+
+    def _odom_debug(self, now, info):
+        """recover on: every debug line says where the odometry comes from, how old it is and its check against vision"""
+        info['odom_src'] = self.odom_src
+        info['odom_age'] = None if self.odom.t_w is None else round(min(now - self.odom.t_w, 99.0), 3)
+        info.setdefault('odom_check', None if self.odom.qual is None else round(self.odom.qual, 2))
 
 
 def main(args=None):
