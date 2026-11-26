@@ -15,7 +15,7 @@ def make(steps, script=(), robot=(-1.0, 0.0, 0.0), ball=(-1.2, 0.8), timeline=()
     world = A.ScriptedWorld(clk, robot=robot, ball=ball, timeline=[(clk.t + dt, ch) for dt, ch in timeline], others=others)
     procs = A.SimProcs(); strat = A.SimStrategy(procs); run = A.SimRunner(clk, world, script); note = A.SimNotifier()
     for i, st in enumerate(steps, 1): st.setdefault("n", i)
-    kw.setdefault("home", HOME); kw.setdefault("our_id", 0)
+    kw.setdefault("home", HOME); kw.setdefault("our_id", 0); kw.setdefault("cameras", [0])
     s = A.Session("blue", steps, head=head, vs=vs, world=world, runner=run, notifier=note, procs=procs, strategy=strat, clock=clk,
                   sleep=clk.sleep, budget_s=budget, echo=False, **kw)
     return s, run, note, world, strat, clk
@@ -133,7 +133,7 @@ def test_robot_entering_the_corridor_stops_the_fetch_and_the_robot_retreats():
     def moved(): world.set(robot=(0.5, 0.05, 0.0))
     script = [dict(match="place_ball.py blue -0.85", line=dict(ok=True, status="done"), dur=6.0, call=moved)]
     s, run, note, world, *_ = make(steps, ball=(0.5, 0.1), script=script,
-                                   timeline=[(2.0, dict(others=[("yellow1", 0.9, 0.6)])), (60.0, dict(others=[]))], budget=600, park=(-0.85, 0.0))
+                                   timeline=[(8.0, dict(others=[("yellow1", 0.9, 0.6)])), (60.0, dict(others=[]))], budget=600, park=(-0.85, 0.0))
     s.run()
     assert run.stops and run.stops[0][1].startswith("another robot: yellow1")
     assert any("goto.py blue -0.4 0.05" in c for c in run.cmds("goto.py"))           # back into the home area
@@ -203,7 +203,7 @@ def make_raw(steps, frames, budget=600.0, **kw):
     clk = A.SimClock(); world = raw_world(clk, frames)
     procs = A.SimProcs(); run = A.SimRunner(clk, world); note = A.SimNotifier()
     for i, st in enumerate(steps, 1): st.setdefault("n", i)
-    kw.setdefault("home", HOME); kw.setdefault("our_id", 3)
+    kw.setdefault("home", HOME); kw.setdefault("our_id", 3); kw.setdefault("cameras", [0])
     s = A.Session("blue", steps, world=world, runner=run, notifier=note, procs=procs, strategy=A.SimStrategy(procs), clock=clk,
                   sleep=clk.sleep, budget_s=budget, echo=False, **kw)
     return s, run, note, world, clk
@@ -326,7 +326,7 @@ def test_retreat_after_a_stopped_fetch_waits_for_the_robot_to_be_clear():
     def moved(): world.set(robot=(0.3, 0.05, 0.0))
     script = [dict(match="place_ball.py blue -0.85", line=dict(ok=True, status="done"), dur=6.0, call=moved)]
     s, run, note, world, strat, clk = make(steps, ball=(0.5, 0.1), script=script, park=(-0.85, 0.0), budget=600,
-                                           timeline=[(2.0, dict(others=[("yellow1", 0.5, 0.6)])), (40.0, dict(others=[]))])
+                                           timeline=[(8.0, dict(others=[("yellow1", 0.5, 0.6)])), (40.0, dict(others=[]))])
     t0 = clk.t; s.run()
     gotos = [c for c in run.calls if "goto.py" in c["cmd"]]
     assert run.stops and gotos and all(c["watched"] for c in run.calls)
@@ -458,7 +458,7 @@ def test_a_camera_that_stops_sending_is_no_information():
     for _ in range(5): clk.sleep(0.02); assert v.snapshot()["vision_age"] <= 0.05
     dead[0] = clk.t
     for _ in range(40): clk.sleep(0.02); s = v.snapshot()
-    assert s["vision_age"] > 0.5 and ("blue", 3) in s["vision_robots"]          # camera 0 alive, camera 1 silent
+    assert s["vision_age"] > 0.5 and [d[:2] for d in s["vision_dets"]] == [("blue", 3)]   # camera 0 alive, camera 1 silent
 
 def test_a_failing_watch_stops_the_step():
     r = A.Runner(echo=False)

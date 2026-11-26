@@ -133,19 +133,23 @@ def check_node_cmd(argv):
 def run_child(argv, stopped, popen=None, clock=None, sleep=None, grace=1.5, timeout=120.0, **kw):
     """run a child tool (characterize.py under series.py) so that a stop gives it time: stopped() -> the signal number
     the parent received, or None. On a stop the signal is forwarded once and the child has `grace` s to send its zeros
-    and save; then SIGKILL. -> (returncode, stdout + stderr text, how: "done" | "stopped" | "killed" | "timeout")"""
+    and save; then SIGKILL. After `timeout` s the same with SIGINT. -> (returncode, stdout + stderr text, how: "done" |
+    "stopped" | "killed" (still running after the grace of a stop) | "timeout")"""
     import signal, subprocess, time
     popen = popen or subprocess.Popen; clock = clock or time.monotonic; sleep = sleep or time.sleep
     p = popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, **kw)
     t0 = clock(); t_sig = None; how = "done"
     while p.poll() is None:
-        sig = stopped()
-        if sig is not None and t_sig is None:
-            t_sig = clock(); how = "stopped"
-            try: p.send_signal(sig)
-            except OSError: pass
-        if (t_sig is not None and clock() - t_sig > grace) or (t_sig is None and clock() - t0 > timeout):
-            how = "killed" if t_sig is not None else "timeout"
+        if t_sig is None:
+            sig = stopped()
+            if sig is None and clock() - t0 > timeout: sig = signal.SIGINT; how = "timeout"
+            elif sig is not None: how = "stopped"
+            if sig is not None:
+                t_sig = clock()
+                try: p.send_signal(sig)
+                except OSError: pass
+        elif clock() - t_sig > grace:
+            if how == "stopped": how = "killed"
             try: p.send_signal(signal.SIGKILL)
             except OSError: pass
             break

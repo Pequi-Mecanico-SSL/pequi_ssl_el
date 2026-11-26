@@ -22,6 +22,7 @@ Environment variables:
 | `SOLO_IFACE` | optional | this computer's address on the robot's network: DDS uses only that address; the field page joins the game controller's multicast on it, `auto_session.py` the vision multicast |
 | `SOLO_ROBOT_INDEX` | optional | our robot's index among its colour in the vision connector's topics (default 0) |
 | `SOLO_OUR_ID` | required by `auto_session.py` with a home area (or `--our-id`) | our robot's vision id: the supervisor tells our robot from every other one by colour and this id in the raw vision |
+| `SOLO_CAMERAS`, `SOLO_CAMERA_IDS` | required by `auto_session.py` with a home area (or `--cameras N` / `--camera-ids 0,1,...`) | the field's cameras: a count N (ids 0..N-1) or a list of camera ids; a listed camera that has not sent a detection frame for 0.5 s, or never, is no information |
 | `SOLO_NOTICE_CMD` | optional | an executable for quiet notices of `auto_session.py` (a switch of halves), called as `CMD "message" "title"`; unset: a log line |
 | `SOLO_OWN_COUNT`, `SOLO_OTHER_COUNT` | optional | robots per team the vision connector reports, ours and the other team's (defaults 1 and 3) |
 | `SOLO_VISION_MAP_MODULE` | optional | path of `vision_map.py` for the strategy node's recovery (`env.sh` sets it to this repository's copy) |
@@ -32,7 +33,7 @@ Environment variables:
 | `SOLO_CMD_TOPIC`, `SOLO_CMD_RELIABLE` | optional | velocity topic of the test tools (default `/cmd_vel`); set `SOLO_CMD_RELIABLE` for a reliable publisher |
 | `SOLO_BOX`, `SOLO_BRAKE`, `SOLO_BRAKE_BOX`, `SOLO_BRAKE_FIRST`, `SOLO_SETTLE`, `SOLO_RAMP` | optional | test area and braking of `characterize.py`, `series.py` and `place_ball.py` (see their docstrings) |
 | `SOLO_EXTRA_GROUPS`, `SOLO_EXTRA_IFACE` | optional | additional multicast groups for `listen.py` (empty by default) |
-| `SOLO_NOTIFY_CMD` | optional | for `auto_session.py`: an executable called as `CMD "message" "title"` for its alerts; unset, alerts are only printed |
+| `SOLO_NOTIFY_CMD` | required by `auto_session.py` with a home area, else optional | an executable called as `CMD "message" "title"` for its alerts (a failing call is tried once more); unset, alerts are only printed |
 | `SOLO_PYTHON` | optional | the Python `auto_session.py` runs its steps with (default `python3`) |
 
 Usual start sequence:
