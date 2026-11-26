@@ -6,7 +6,7 @@
 # corridor; a ball in a goal or against a wall is a job for a person (one alert).
 # The strategy node must have been started with run_real.sh and switched off (its saved line is restarted with the
 # side and parameters of each strategy step). Home area and parking spot in the header.
-# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10 --our-id N
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10 --our-id N --cameras C
 {"kind": "session", "name": "left_ball_slot_10", "budget_min": 10, "home": "-2.2,-0.10,-1.45,1.45", "park": [-0.85, 0.0], "vars": {"OUT": "${SOLO_DATA}/sessions"}, "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
 {"kind": "marker", "label": "start marker", "text": "left-half ball slot: start (auto_session)", "data": "use"}
 {"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}
@@ -18,9 +18,9 @@
 {"kind": "test", "label": "ram 1.5 toward -y", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
 {"kind": "place", "label": "ball for ram 1.5 toward +y", "x": -0.9, "y": 0.30, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15b"}
 {"kind": "test", "label": "ram 1.5 toward +y", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
-{"kind": "place", "label": "ball for push-out 1", "x": -1.95, "y": 0.0, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push1"}
+{"kind": "place", "label": "ball for push-out 1", "x": -1.78, "y": 0.05, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push1"}
 {"kind": "strategy", "label": "push-out 1: strategy on 10 s, side negative", "on": true, "seconds": 10, "side": "negative", "params": {"force_state": "running", "foe_all": false, "speed_cap": 1.5}, "end_ball_out": "-2.25,-1.60,-0.82,0.82", "edge_guard": 1.0, "needs_ball": true, "group": "push1"}
-{"kind": "place", "label": "ball for push-out 2", "x": -1.90, "y": 0.30, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push2"}
+{"kind": "place", "label": "ball for push-out 2", "x": -1.85, "y": 0.25, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push2"}
 {"kind": "strategy", "label": "push-out 2: strategy on 10 s, side negative", "on": true, "seconds": 10, "side": "negative", "params": {"force_state": "running", "foe_all": false, "speed_cap": 1.5}, "end_ball_out": "-2.25,-1.60,-0.82,0.82", "edge_guard": 1.0, "needs_ball": true, "group": "push2"}
 {"kind": "place", "label": "ball for keep-out before their area 1", "x": -1.55, "y": 0.0, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "keep1"}
 {"kind": "strategy", "label": "keep-out before their area 1: strategy on 12 s, side positive", "on": true, "seconds": 12, "side": "positive", "params": {"force_state": "running", "foe_all": false, "speed_cap": 1.5}, "edge_guard": 1.0, "needs_ball": true, "group": "keep1"}
@@ -30,7 +30,7 @@
 {"kind": "test", "label": "ram 1.0 toward -y", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
 {"kind": "place", "label": "ball for ram 1.0 toward +y", "x": -0.9, "y": 0.30, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10b"}
 {"kind": "test", "label": "ram 1.0 toward +y", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
-{"kind": "place", "label": "ball for push-out 3", "x": -1.95, "y": -0.40, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push3"}
+{"kind": "place", "label": "ball for push-out 3", "x": -1.85, "y": -0.35, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "push3"}
 {"kind": "strategy", "label": "push-out 3: strategy on 10 s, side negative", "on": true, "seconds": 10, "side": "negative", "params": {"force_state": "running", "foe_all": false, "speed_cap": 1.5}, "end_ball_out": "-2.25,-1.60,-0.82,0.82", "edge_guard": 1.0, "needs_ball": true, "group": "push3"}
 {"kind": "place", "label": "ball for keep-out before their area 3", "x": -1.55, "y": -0.30, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "keep3"}
 {"kind": "strategy", "label": "keep-out before their area 3: strategy on 12 s, side positive", "on": true, "seconds": 12, "side": "positive", "params": {"force_state": "running", "foe_all": false, "speed_cap": 1.5}, "edge_guard": 1.0, "needs_ball": true, "group": "keep3"}

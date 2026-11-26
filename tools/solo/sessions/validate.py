@@ -7,10 +7,10 @@ is given). --map defaults to $SOLO_DATA/vision_map/map.npz (the camera coverage 
 the coverage checks are skipped ("coverage not checked (no map)") and the rest runs.
 Plans: JSON and argument forms (characterize.py / series.py), start / run / stop points inside the line's box, inside
 the home area and 0.25 m inside the field lines (coverage sweeps excepted), coverage along every path (cells with a
-detection rate under 0.8 are "weak", cells without evidence "unseen").
+detection rate under 0.8 are "weak", cells without evidence "unseen"; a ram's ball spot on such a cell is a problem).
 Sessions: the steps auto_session.py would refuse at load time (an area outside the home area, a strategy step without
 its side, a ball step in a no-ball session), every placement spot (inside the home area, the placer's own check,
-coverage, and BallPlacer's plan from where the ball is expected to be before it), every ram (robot path from the
+coverage: a spot on a weak or unseen cell is a problem, in either half, and BallPlacer's plan from where the ball is expected to be before it), every ram (robot path from the
 spot placed within 0.15 m, inside the step's box and the home area, coverage along it) and where its ball is expected
 to stop: exit ratio 1.0 / 1.2 x the robot's speed, -9 / 0 / +9 deg off the heading, wall restitution 0.3 / 0.5,
 deceleration 0.157 + 0.116 v. A problem is printed in capitals; the last line counts them."""
@@ -46,6 +46,12 @@ def coverage(vm, pts):
     if weak: out.append(f"weak {len(weak)} {sorted(weak)[:3]}")
     if unseen: out.append(f"unseen {len(unseen)} {sorted(unseen)[:3]}")
     return "; ".join(out) or "coverage ok"
+
+def spot_flags(vm, p, what="spot"):
+    """a ball spot (a placement, a ram's ball) on a cell of the map that is weak or unseen: a problem (both halves are
+    checked, as every file is checked mirrored too); [] without a map"""
+    c = coverage(vm, [p])
+    return [] if vm is None or c == "coverage ok" else [bad(f"{what} ({p[0]:+.2f}, {p[1]:+.2f}) not covered by the cameras: {c}")]
 
 def roll_ball(p, v, ang, e):
     """straight roll with the walls and the left goal; -> (x, y, what)"""
@@ -106,6 +112,7 @@ def check_plan(path, vm, home):
             assert len(a) == 4 and len(e["spot"]) == 2, (path, n)
             v, d, run, past = a; u = (math.cos(math.radians(d)), math.sin(math.radians(d))); sx, sy = e["spot"]
             pts = line_pts((sx - run * u[0], sy - run * u[1]), (sx + (past + 0.6) * u[0], sy + (past + 0.6) * u[1]))
+            notes += spot_flags(vm, (sx, sy), "ball spot")
         else:
             raise SystemExit(f"unknown test {t} in {path}:{n}")
         flags = []
@@ -137,6 +144,7 @@ def check_session(path, vm, home_opt, mirror_dir=None):
             if home is not None and not A.in_rect(spot, home): flags.append(bad("spot outside the home area"))
             why = BallPlacer(spot).check_target()
             if why: flags.append(bad(why))
+            flags += spot_flags(vm, spot)
             unreach = [(round(b[0], 2), round(b[1], 2), w) for b in expect for w in [placer_ok(b, spot)] if w]
             if unreach: flags.append(f"placer cannot start from {len(unreach)}/{len(expect)} expected ball spots {unreach[:2]}")
             dist = min(math.hypot(b[0] - spot[0], b[1] - spot[1]) for b in expect) if expect else 0
