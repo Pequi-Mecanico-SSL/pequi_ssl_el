@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>solo_strategy</name>
+  <version>0.0.1</version>
+  <description>One-robot strategy: vision and referee topics in, the sslenv scripted policy (run by policy_server.py), cmd_vel out.</description>
+  <maintainer email="gustavomoura@discente.ufg.br">Gustavo</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>pequi_msgs</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>
