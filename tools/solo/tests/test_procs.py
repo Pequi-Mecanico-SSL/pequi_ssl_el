@@ -106,3 +106,26 @@ def test_check_node_cmd_accepts_only_the_nodes_own_form(files):
     for name, a in hostile.items():
         why = P.check_node_cmd(a)
         assert why, name
+
+
+def test_run_child_forwards_a_stop_and_gives_the_child_its_grace():
+    import signal
+    class Clock:
+        t = 0.0
+        def __call__(self): return self.t
+        def sleep(self, dt): self.t += dt
+    class FakeChild:
+        def __init__(self, clk, ends_after_signal):
+            self.clk, self.after, self.sigs, self.rc, self.t_sig = clk, ends_after_signal, [], None, None
+        def poll(self):
+            if self.rc is None and self.t_sig is not None and self.after is not None and self.clk.t - self.t_sig >= self.after: self.rc = -2
+            return self.rc
+        def send_signal(self, s):
+            self.sigs.append(s); self.t_sig = self.clk.t if self.t_sig is None else self.t_sig
+            if s == signal.SIGKILL: self.rc = -9
+        def communicate(self, timeout=None): return ('{"test": "spin", "interrupted": true}\n', None)
+    for after, how, sigs in ((0.4, "stopped", [signal.SIGINT]), (None, "killed", [signal.SIGINT, signal.SIGKILL])):
+        clk = Clock(); child = FakeChild(clk, after)
+        rc, out, h = P.run_child(["x"], lambda: signal.SIGINT if clk.t >= 1.0 else None, popen=lambda *a, **k: child, clock=clk, sleep=clk.sleep)
+        assert h == how and child.sigs == sigs and '"interrupted": true' in out
+        if after is None: assert 2.5 <= clk.t <= 2.7                       # 1.5 s of grace, not 0.25 s

@@ -43,6 +43,7 @@ side: which half we defend: auto (from the referee), negative or positive (field
 import json
 import math
 import os
+import signal
 import socket
 import time
 
@@ -339,8 +340,25 @@ class SoloNode(Node):
         info.setdefault('odom_check', None if self.odom.qual is None else round(self.odom.qual, 2))
 
 
+def _stop_signal(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _init_rclpy(args):
+    """rclpy.init without rclpy's own signal handlers when the option exists (they shut the context down before the
+    final zero is published); then SIGINT and SIGTERM end the spin with KeyboardInterrupt. Without the option: as before"""
+    try:
+        from rclpy.signals import SignalHandlerOptions
+    except ImportError:
+        rclpy.init(args=args)
+        return
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _stop_signal)
+    signal.signal(signal.SIGTERM, _stop_signal)
+
+
 def main(args=None):
-    rclpy.init(args=args)
+    _init_rclpy(args)
     node = SoloNode()
     try:
         rclpy.spin(node)

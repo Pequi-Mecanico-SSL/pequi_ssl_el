@@ -22,12 +22,19 @@ More plan fields:
 --max N: stop after N tests (e.g. the rams one visit of the person handling the ball allows).
 SOLO_BRAKE=auto: the early braking assumes 0.7 x the slowest braking measured so far in --results on the same surface
 (SOLO_BRAKE_FIRST m/s2, default 0.8, before any measurement; never below 0.6)
-(steps commanded at >= 0.8 m/s), within 1.2..4.0 m/s2; 1.5 until there is a measurement."""
+(steps commanded at >= 0.8 m/s), within 1.2..4.0 m/s2; 1.5 until there is a measurement.
+SIGINT / SIGTERM: the signal only sets a flag (rclpy without its own handlers when SignalHandlerOptions.NO exists); a
+running characterize.py gets the signal forwarded and 1.5 s to send its zeros and save (procs.run_child); the series
+sends zeros for 0.3 s itself, prints "stopped by SIGINT ..." and exits 130."""
 import json, math, os, subprocess, sys, time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Pose2D, Twist
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from place_ball import Stop, init_rclpy  # noqa: E402  the shared stop handling (no ROS at import)
+from procs import run_child              # noqa: E402
+class Stopped(Exception): pass
 
 args = sys.argv[1:]
 def opt(name, default):
@@ -63,26 +70,29 @@ def brake_for(surface):
     except (OSError, ValueError): pass
     return round(max(0.6, min(4.0, 0.7 * min(dec))), 2) if dec else float(os.environ.get("SOLO_BRAKE_FIRST", "0.8"))
 
-rclpy.init(); n = Node('series'); pub = n.create_publisher(Twist, os.environ.get('SOLO_CMD_TOPIC', '/cmd_vel'), 10 if os.environ.get('SOLO_CMD_RELIABLE') else qos_profile_sensor_data)
+stop = Stop(); init_rclpy(rclpy); stop.install(); n = Node('series'); pub = n.create_publisher(Twist, os.environ.get('SOLO_CMD_TOPIC', '/cmd_vel'), 10 if os.environ.get('SOLO_CMD_RELIABLE') else qos_profile_sensor_data)
 hist = []
 def on_ball(m):
     hist.append((time.time(), m.x, m.y)); del hist[:-400]
 n.create_subscription(Pose2D, '/vision/poses/ball', on_ball, 20)
 
+def check():
+    if stop.sig is not None: raise Stopped()
 def turn(w, T):
     t0 = time.time()
     while time.time() - t0 < T:
+        check()
         m = Twist(); m.angular.z = float(w); pub.publish(m); rclpy.spin_once(n, timeout_sec=0.03)
 def rest(T=0.4):
     t0 = time.time()
     while time.time() - t0 < T:
-        pub.publish(Twist()); rclpy.spin_once(n, timeout_sec=0.03)
+        check(); pub.publish(Twist()); rclpy.spin_once(n, timeout_sec=0.03)
 def wiggle():
     turn(3.0, 0.3); turn(-3.0, 0.6); turn(3.0, 0.3); rest(0.5)
 def listen(T):
     """wait without publishing anything (another program may be driving the robot)"""
     t0 = time.time()
-    while time.time() - t0 < T: rclpy.spin_once(n, timeout_sec=0.03)
+    while time.time() - t0 < T: check(); rclpy.spin_once(n, timeout_sec=0.03)
 def ball_ready(sx, sy, tol=0.08):
     """the ball within tol of the spot and still (< 1 cm of movement) over the last 1.5 s"""
     now = time.time(); h = [p for p in hist if now - p[0] < 1.5]
@@ -90,10 +100,12 @@ def ball_ready(sx, sy, tol=0.08):
     xs = [p[1] for p in h]; ys = [p[2] for p in h]
     return max(xs) - min(xs) < 0.01 and max(ys) - min(ys) < 0.01 and math.hypot(xs[-1] - sx, ys[-1] - sy) < tol
 def run(*a, env=None):
-    r = subprocess.run(["python3", f"{HERE}/characterize.py", team, *[str(x) for x in a], "--out", OUT], capture_output=True, text=True, timeout=120,
-                       env=env)
-    line = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith("{") or l.startswith("ABORT") or "not in vision" in l or "no ball" in l]
-    return line[-1] if line else ((r.stderr.strip().splitlines() or ["no output"])[-1])
+    check()
+    rc, text, how = run_child(["python3", f"{HERE}/characterize.py", team, *[str(x) for x in a], "--out", OUT], lambda: stop.sig, env=env)
+    for l in text.splitlines(): (print("    " + l, flush=True) if how != "done" and l.startswith("{") else None)
+    if how != "done" and stop.sig is not None: raise Stopped()
+    line = [l for l in text.splitlines() if l.startswith("{") or l.startswith("ABORT") or "not in vision" in l or "no ball" in l]
+    return line[-1] if line else ((text.strip().splitlines() or ["no output"])[-1])
 
 def env_for(e):
     env = dict(os.environ)
@@ -111,55 +123,64 @@ def record(d, label, i, e):
     d.update(label=label, n=i, clock=time.strftime("%H:%M:%S"), surface=e.get("surface", ""))
     open(RES, "a").write(json.dumps(d) + "\n")
 
-rest(1.0)
-done = 0
-for i, e in enumerate(plan, 1):
-    if i < FIRST: continue
-    if MAXN and done >= MAXN: print(f"stopped after {done} tests (--max); continue with --resume", flush=True); break
-    done += 1
-    label, test, a = e.get("label", ""), e["test"], e.get("args", [])
-    env = env_for(e)
-    print(f"[{i}/{len(plan)}] {label}: {test} {a}" + (f"  (brake guard {env['SOLO_BRAKE']} m/s2)" if AUTO else ""), flush=True)
-    if test == "ram":
-        sx, sy = e["spot"]; dirn = float(a[1]) if len(a) > 1 else 0.0; runup = float(a[2]) if len(a) > 2 else 0.75
-        ux, uy = math.cos(math.radians(dirn)), math.sin(math.radians(dirn))
-        out = run("goto", round(sx - runup * ux, 3), round(sy - runup * uy, 3), dirn, env=env)
-        if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
-        wiggle(); t_ask = time.time()
-        print(f"    waiting for the ball at ({sx:+.2f}, {sy:+.2f}) ...", flush=True)
-        while not ball_ready(sx, sy):
-            rest(0.2)
-            if time.time() - t_ask > 3.0: wiggle(); t_ask = time.time()
-        turn(-3.0, 2.1); rest(2.0)
-    else:
-        told = False
-        while ball_in_area(e):
-            if not told: print("    REMOVE THE BALL from the test area ...", flush=True); told = True
-            rest(0.3)
-        if "at" in e:
-            out = run("goto", *e["at"], env=env)
-            if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
-    listen(0.3)
-    if "speeds" in e:                                   # escalation along a line, back and forth
-        prev = None
-        for k, sp in enumerate(e["speeds"]):
-            aa = list(a); aa[1 if test == "step" else 0] = sp
-            if k % 2 == 1 and "back" in e: aa[2:5] = e["back"]
-            env = env_for(e)
-            out = run(test, *aa, env=env)
-            print(f"    v={sp}: " + out, flush=True)
-            if not out.startswith("{"): sys.exit(1)
-            d = json.loads(out); record(d, f"{label} {sp}", i, e)
-            pk = d.get("peak_speed") or d.get("steady_rate") or 0.0
-            if prev is not None and pk < 1.04 * prev:
-                print(f"    peak speed {pk} vs {prev} before: no longer rising, escalation stops", flush=True); break
-            prev = pk if prev is None else max(prev, pk)
-            rest(0.3)
-    else:
-        out = run(test, *a, env=env)
-        print("    " + out, flush=True)
-        if not out.startswith("{"): sys.exit(1)
-        record(json.loads(out), label, i, e)
-    pr = progress(); pr[KEY] = i; json.dump(pr, open(PROG, "w"))
-    rest(0.5)
-print("series done", flush=True)
+def main():
+  done = 0
+  rest(1.0)
+  for i, e in enumerate(plan, 1):
+      if i < FIRST: continue
+      if MAXN and done >= MAXN: print(f"stopped after {done} tests (--max); continue with --resume", flush=True); break
+      done += 1
+      label, test, a = e.get("label", ""), e["test"], e.get("args", [])
+      env = env_for(e)
+      print(f"[{i}/{len(plan)}] {label}: {test} {a}" + (f"  (brake guard {env['SOLO_BRAKE']} m/s2)" if AUTO else ""), flush=True)
+      if test == "ram":
+          sx, sy = e["spot"]; dirn = float(a[1]) if len(a) > 1 else 0.0; runup = float(a[2]) if len(a) > 2 else 0.75
+          ux, uy = math.cos(math.radians(dirn)), math.sin(math.radians(dirn))
+          out = run("goto", round(sx - runup * ux, 3), round(sy - runup * uy, 3), dirn, env=env)
+          if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
+          wiggle(); t_ask = time.time()
+          print(f"    waiting for the ball at ({sx:+.2f}, {sy:+.2f}) ...", flush=True)
+          while not ball_ready(sx, sy):
+              rest(0.2)
+              if time.time() - t_ask > 3.0: wiggle(); t_ask = time.time()
+          turn(-3.0, 2.1); rest(2.0)
+      else:
+          told = False
+          while ball_in_area(e):
+              if not told: print("    REMOVE THE BALL from the test area ...", flush=True); told = True
+              rest(0.3)
+          if "at" in e:
+              out = run("goto", *e["at"], env=env)
+              if not out.startswith("{"): print("goto failed:", out, flush=True); sys.exit(1)
+      listen(0.3)
+      if "speeds" in e:                                   # escalation along a line, back and forth
+          prev = None
+          for k, sp in enumerate(e["speeds"]):
+              aa = list(a); aa[1 if test == "step" else 0] = sp
+              if k % 2 == 1 and "back" in e: aa[2:5] = e["back"]
+              env = env_for(e)
+              out = run(test, *aa, env=env)
+              print(f"    v={sp}: " + out, flush=True)
+              if not out.startswith("{"): sys.exit(1)
+              d = json.loads(out); record(d, f"{label} {sp}", i, e)
+              pk = d.get("peak_speed") or d.get("steady_rate") or 0.0
+              if prev is not None and pk < 1.04 * prev:
+                  print(f"    peak speed {pk} vs {prev} before: no longer rising, escalation stops", flush=True); break
+              prev = pk if prev is None else max(prev, pk)
+              rest(0.3)
+      else:
+          out = run(test, *a, env=env)
+          print("    " + out, flush=True)
+          if not out.startswith("{"): sys.exit(1)
+          record(json.loads(out), label, i, e)
+      pr = progress(); pr[KEY] = i; json.dump(pr, open(PROG, "w"))
+      rest(0.5)
+  print("series done", flush=True)
+
+try:
+    main()
+except Stopped:
+    try: Stop.zeros(lambda *a: pub.publish(Twist()), rclpy.ok, lambda dt: rclpy.spin_once(n, timeout_sec=dt), time.monotonic)
+    except Exception: pass
+    print("stopped by " + Stop.NAMES.get(stop.sig, str(stop.sig)), flush=True); sys.exit(130)
+

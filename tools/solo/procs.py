@@ -128,3 +128,28 @@ def check_node_cmd(argv):
         if not m: return f"not name:=value: {rest[i + 1][:40]!r}"
         if m.group(1) not in NODE_PARAMS: return f"unknown parameter: {m.group(1)[:40]!r}"
     return ""
+
+
+def run_child(argv, stopped, popen=None, clock=None, sleep=None, grace=1.5, timeout=120.0, **kw):
+    """run a child tool (characterize.py under series.py) so that a stop gives it time: stopped() -> the signal number
+    the parent received, or None. On a stop the signal is forwarded once and the child has `grace` s to send its zeros
+    and save; then SIGKILL. -> (returncode, stdout + stderr text, how: "done" | "stopped" | "killed" | "timeout")"""
+    import signal, subprocess, time
+    popen = popen or subprocess.Popen; clock = clock or time.monotonic; sleep = sleep or time.sleep
+    p = popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, **kw)
+    t0 = clock(); t_sig = None; how = "done"
+    while p.poll() is None:
+        sig = stopped()
+        if sig is not None and t_sig is None:
+            t_sig = clock(); how = "stopped"
+            try: p.send_signal(sig)
+            except OSError: pass
+        if (t_sig is not None and clock() - t_sig > grace) or (t_sig is None and clock() - t0 > timeout):
+            how = "killed" if t_sig is not None else "timeout"
+            try: p.send_signal(signal.SIGKILL)
+            except OSError: pass
+            break
+        sleep(0.05)
+    try: out = p.communicate(timeout=2.0)[0] or ""
+    except Exception: out = ""
+    return p.poll(), out, how

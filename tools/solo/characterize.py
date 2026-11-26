@@ -44,7 +44,9 @@ def inside(x, y, area=None):
     return any(r[0] <= x <= r[1] and r[2] <= y <= r[3] for r in (area or AREA))
 A_BRAKE = float(os.environ.get("SOLO_BRAKE", "1.5"))
 RAMP = float(os.environ.get("SOLO_RAMP", "0"))     # m/s2: ramp the commanded speed of step tests instead of a jump (0 = jump)
-rclpy.init(); n = Node('characterize'); pub = n.create_publisher(Twist, os.environ.get('SOLO_CMD_TOPIC', '/cmd_vel'), 10 if os.environ.get('SOLO_CMD_RELIABLE') else qos_profile_sensor_data)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from place_ball import init_rclpy  # noqa: E402  rclpy without its own signal handlers when the option exists: ours below stays
+init_rclpy(rclpy); n = Node('characterize'); pub = n.create_publisher(Twist, os.environ.get('SOLO_CMD_TOPIC', '/cmd_vel'), 10 if os.environ.get('SOLO_CMD_RELIABLE') else qos_profile_sensor_data)
 pose = [None, 0.0]; ball = [None, 0.0]; log = []; cmd = [0.0, 0.0, 0.0]
 T0 = time.monotonic(); T0_WALL = time.time()          # log times are seconds after T0 (wall clock T0_WALL)
 now = lambda: time.monotonic() - T0
@@ -59,12 +61,18 @@ wrap = lambda a: (a + math.pi) % (2 * math.pi) - math.pi
 def send(vx, vy, w):
     vx, vy, w = float(vx), float(vy), float(w); cmd[:] = [vx, vy, w]; m = Twist(); m.linear.x, m.linear.y, m.angular.z = vx, vy, w; pub.publish(m)
 
+STOPPING = []
 def on_stop(*_):
-    """SIGINT / SIGTERM (a supervisor stopping the test, Ctrl-C): zeros, the log, exit"""
+    """SIGINT / SIGTERM (a supervisor stopping the test, Ctrl-C): zeros, the log, a result line marked interrupted, exit"""
+    if STOPPING: return                                # a second signal (the group's and the one series.py forwards): once
+    STOPPING.append(1)
     for _ in range(10):
         try: send(0, 0, 0); time.sleep(0.02)
         except Exception: break
-    try: save()
+    p = None
+    try: p = save()
+    except Exception: pass
+    try: print(json.dumps(dict(test=test, args=rest, interrupted=True, signal=_[0] if _ else None, log=p)), flush=True)
     except Exception: pass
     os._exit(130)
 import signal
