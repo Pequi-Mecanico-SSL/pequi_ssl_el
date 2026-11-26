@@ -55,6 +55,11 @@ on the same computer, including the strategy node; its STRATEGY button stops and
 JSON POST requests addressed to its own host and port, so other clients must send
 `Content-Type: application/json` and a matching `Host` header.
 
+Status of the sessions on a shared field (a home area, the `left_*` session files): run so far only against the
+simulator (start checks, the stop and alert when another robot enters the half, the identity probe after the robot was
+moved by hand) and not yet on the real robot. Until a session has run on the real field with a person at the stop
+button, run them with a person watching.
+
 Unattended test sessions: `auto_session.py <team> tools/solo/sessions/short_10.jsonl --budget 10` runs the steps of
 a session file (placements, tests, series, strategy on/off) with the field page running and locked, and the strategy
 started with `run_real.sh` and switched off; `--dry-run` prints every command, `--sim ok` runs it offline. The
