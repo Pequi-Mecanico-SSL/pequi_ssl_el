@@ -20,7 +20,8 @@ test's own box is often small and the robot comes from the test before it; witho
 confined to the test's box, and a robot that starts outside it stops at once ("at the edge of the allowed area").
 With SOLO_GOTO_BOX the robot is also driven to the start of every step and sweep before the test (they drive there
 themselves, but inside their own box), and before the first test of a run to the middle of its box when it has no
-start of its own (a goto, a spin without "at").
+start of its own (a goto, a spin without "at"). A start outside SOLO_GOTO_BOX is approached to the nearest point
+0.05 m inside it.
     "speeds": [1.0, 1.4, ...]      escalate a step (args[1]) or a spin (args[0]): each value in turn; it stops once the
                                    peak speed (spin: steady rate) rises by less than 4 % over the best before it
     "back": [x, y, dir_deg]        with "speeds": every second run starts here instead (back and forth along a line)
@@ -118,14 +119,24 @@ def goto_env(env):
     area = os.environ.get("SOLO_GOTO_BOX", "")
     return dict(env, SOLO_BOX=area) if area else env
 
+def into_goto_box(p, d=0.05):
+    """the point of SOLO_GOTO_BOX nearest to p, d inside its edges (the drive there stops at the edge of that box; the
+    test then drives the rest of the way to its start inside its own box); None when the box is not one rectangle
+    and p lies outside it"""
+    rs = [[float(v) for v in r.split(",")] for r in os.environ.get("SOLO_GOTO_BOX", "").split(";") if r.strip()]
+    if any(r[0] + d <= p[0] <= r[1] - d and r[2] + d <= p[1] <= r[3] - d for r in rs): return p
+    if len(rs) != 1: return None
+    r = rs[0]
+    return [round(min(max(p[0], r[0] + d), r[1] - d), 3), round(min(max(p[1], r[2] + d), r[3] - d), 3), p[2]]
+
 def start_of(e, first):
     """[x, y, heading deg] to drive to before a test when SOLO_GOTO_BOX is set, or None: the start a step or a sweep
     drives to itself (it does that inside its own box, which the robot may be outside of after another test); for
     the first test of a run without a start of its own (a goto, a spin without "at"), the middle of its box"""
     a = e.get("args", [])
     if not os.environ.get("SOLO_GOTO_BOX") or "at" in e or e["test"] == "ram": return None
-    if e["test"] == "step" and len(a) >= 6: return [float(a[2]), float(a[3]), float(a[4]) - (0.0 if a[0] == "fwd" else 90.0)]
-    if e["test"] == "sweep" and len(a) >= 4: return [float(a[0]), float(a[2]), 0.0]
+    if e["test"] == "step" and len(a) >= 6: return into_goto_box([float(a[2]), float(a[3]), float(a[4]) - (0.0 if a[0] == "fwd" else 90.0)])
+    if e["test"] == "sweep" and len(a) >= 4: return into_goto_box([float(a[0]), float(a[2]), 0.0])
     if first and e.get("box"):
         r = box_of(e)[0]; return [round((r[0] + r[1]) / 2, 3), round((r[2] + r[3]) / 2, 3), 0.0]
     return None
