@@ -244,6 +244,46 @@ def test_probes_without_a_verdict_count_and_the_last_alert_says_how_many_and_why
     assert out == ["no identity probe left (2 used, 2 without a verdict, the last: the probe child did not complete its turn "
                    "(rc 1): robot not in vision): the session holds: put the robot back at (-1.47, -0.35) or restart the session"]
 
+def test_the_probe_child_gets_its_own_braking_settings_whatever_the_session_header_sets():
+    head = {"kind": "session", "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2",
+                                       "SOLO_RAMP": "0.8", "SOLO_BRAKE_BOX": "-2.0,-0.5,-1.0,1.0"}}
+    s, run, note, world, clk = make_cams([SPIN(label="a")], lambda t: {0: [OURS]}, head=head)
+    st = s.probe_step(1.5, "-1.25,-0.75,-0.25,0.25")
+    s.run_step(st, watch=lambda: None); env = run.calls[-1]["env"]
+    assert " spin +1.50 0.70 " in run.calls[-1]["cmd"]
+    assert env["SOLO_BRAKE"] == "1.5" and env["SOLO_RAMP"] == "0" and env["SOLO_BOX"] == "-1.25,-0.75,-0.25,0.25"
+    assert "SOLO_BRAKE_FIRST" not in env and "SOLO_BRAKE_BOX" not in env
+    s.run_step(SPIN(label="b"), watch=lambda: None); env = run.calls[-1]["env"]      # a test step: auto as series.py resolves it
+    assert env["SOLO_BRAKE"] == "1.2" and env["SOLO_RAMP"] == "0.8" and env["SOLO_BOX"] == "-1.4,-0.6,-0.4,0.4"
+
+def test_two_probe_children_failing_with_the_same_exception_end_probing_with_one_alert():
+    exc = "ValueError: could not convert string to float: 'auto'"
+    run_, go = aborting_probes(99, exc, 1); rec, log_, log = logged(("probe_start", "probe_off"))
+    A.SimRunner.run = run_; A.Session.log = log_
+    try: s, run, note, clk, t0 = twin_late((-1.0, 0.5), probes=6, budget=200)
+    finally: A.SimRunner.run = go; A.Session.log = log
+    assert s.probes_run == 2 and len(probe_children(run)) == 2 and s.probe_off == exc
+    assert len([r for r in rec if r[1] == "probe_start"]) == 2 and len([r for r in rec if r[1] == "probe_off"]) == 1
+    off = [m for m in alerts(note) if m.startswith("the identity probe cannot run")]
+    assert off == [f"the identity probe cannot run: its child (characterize.py spin) failed 2 times in a row with {exc}: a set-up "
+                   "fault, no more probes this session; the session holds: put the robot back at (-1.47, -0.35) or restart the session"]
+    assert not [m for m in alerts(note) if m.startswith("no identity probe left")] and s.ours_lost is not None and s.done == []
+
+def test_probe_children_failing_with_different_exceptions_or_not_in_vision_keep_probing():
+    lines = iter(["ValueError: a", "robot not in vision", "ValueError: a", "KeyError: 'b'", "ValueError: a", "robot not in vision"])
+    go = A.SimRunner.run
+    def run_(self, argv, env, timeout, tee=None, watch=None):
+        if "spin" in argv and argv[argv.index("spin") + 2] == "0.70":
+            self.calls.append(dict(cmd=" ".join(argv), env=env, timeout=timeout, watched=watch is not None))
+            data, ln = A.result_of([next(lines)])
+            return dict(rc=1, timed_out=False, line=ln, data=data, t0=self.clock(), t1=self.clock())
+        return go(self, argv, env, timeout, tee=tee, watch=watch)
+    A.SimRunner.run = run_
+    try: s, run, note, clk, t0 = twin_late((-1.0, 0.5), probes=6, budget=200)
+    finally: A.SimRunner.run = go
+    assert s.probes_run == 6 and s.probe_off is None and not [m for m in alerts(note) if m.startswith("the identity probe cannot run")]
+    assert [m for m in alerts(note) if m.startswith("no identity probe left")]
+
 
 # ---- 4. a hold caused only by our robot unseen
 def restart_after(frames_extra=lambda dt: [], gap=(2.0, 3.0), camera_off=False):

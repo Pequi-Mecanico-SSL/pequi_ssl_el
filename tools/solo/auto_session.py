@@ -1106,6 +1106,7 @@ class Session:
         self.probes, self.probe_rate, self.probe_time = int(probes), float(probe_rate), float(probe_time)
         self.probes_run = 0; self.probe_bad = []; self.probe_cand = None; self.probes_out_sent = False   # the identity probe
         self.probe_none = 0; self.probe_none_why = None; self.probe_wait = -1e18      # probes without a verdict
+        self.probe_exc = None; self.probe_off = None                              # a probe child's exception in a row: [line, n]; set-up fault
         self.cameras_given = None if self.cameras is None else list(self.cameras); self.cams_logged = set()
         self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
         self.home_auto = home_auto; self.half_sign = 1; self.switches = []; self.notices = []; self.pending = None; self.current = None
@@ -1393,7 +1394,7 @@ class Session:
         L = self.ours_lost
         if not L: return "restart the session"
         mine = (s or {}).get("mine") or []; at = mine[0][:2] if len(mine) == 1 else (L["x"], L["y"])
-        can = probe and self.probes and self.probes_run < self.probes and in_rect(at, fetch_area(self.home, self.fetch_limit))
+        can = probe and self.probes and self.probes_run < self.probes and not self.probe_off and in_rect(at, fetch_area(self.home, self.fetch_limit))
         more = "; the session will try to recognise it by a short turn on the spot" if can else ""
         return f"put the robot back at ({L['x']:+.2f}, {L['y']:+.2f}) or restart the session{more}"
     def found_text(self, L, msg, s):
@@ -1413,6 +1414,9 @@ class Session:
     PROBE_BAND = (0.4, 1.6)             # the heading change that passes, times rate x time
     PROBE_BAD_S, PROBE_BAD_D = 60.0, 0.3   # no new probe of a candidate within this of a failed one for this long
     PROBE_RETRY = 10.0                  # s: no new probe this long after one whose child did not complete its turn
+    PROBE_BRAKE = "1.5"                 # m/s^2: SOLO_BRAKE of the probe child (characterize.py's default)
+    PROBE_EXC = re.compile(r"^(?:[A-Za-z_][\w.]*\.)?[A-Za-z_]\w*(?:Error|Exception)(?::|$)")   # a Python exception's last line
+    PROBE_EXC_N = 2                     # probe children failing with the same exception in a row: probing ends
     def candidate(self, s):
         """the one robot of our colour + id in view with its heading: (x, y, heading, age), or None"""
         mine = s.get("mine") or []
@@ -1434,7 +1438,7 @@ class Session:
         no second copy; no other robot inside our watch area or within intrude_dist of it; it stands inside our half or
         within fetch_limit beyond its open edges; no failed probe at that place within PROBE_BAD_S s; probes left; not
         within PROBE_RETRY s of a probe whose child did not complete its turn"""
-        if not self.probes or self.probes_run >= self.probes or self.ours_lost is None: self.probe_cand = None; return None
+        if not self.probes or self.probes_run >= self.probes or self.ours_lost is None or self.probe_off: self.probe_cand = None; return None
         c = None if self.vision_gap(s) else self.candidate(s)
         ok = c is not None and not self.probe_others(s, c) and in_rect(c[:2], fetch_area(self.home, self.fetch_limit))
         ok = ok and not any(now - t < self.PROBE_BAD_S and math.hypot(c[0] - x, c[1] - y) < self.PROBE_BAD_D for x, y, t in self.probe_bad)
@@ -1466,8 +1470,11 @@ class Session:
         return watch
     def probe_step(self, rate, box):
         """the probe child as a step: characterize.py spin <rate> <time> (open loop: only an angular rate, zeros before
-        and after; it stops on its own when the pose it reads is stale or leaves SOLO_BOX)"""
-        return dict(kind="test", test="spin", args=[f"{rate:+.2f}", f"{self.probe_time:.2f}"], env={"SOLO_BOX": box},
+        and after; it stops on its own when the pose it reads is stale or leaves SOLO_BOX). Its braking and ramp
+        settings are set here whatever the header or the step set: SOLO_BRAKE PROBE_BRAKE, SOLO_RAMP 0,
+        SOLO_BRAKE_FIRST and SOLO_BRAKE_BOX removed, SOLO_BOX the small box around the candidate"""
+        env = {"SOLO_BOX": box, "SOLO_BRAKE": self.PROBE_BRAKE, "SOLO_RAMP": "0", "SOLO_BRAKE_FIRST": None, "SOLO_BRAKE_BOX": None}
+        return dict(kind="test", test="spin", args=[f"{rate:+.2f}", f"{self.probe_time:.2f}"], env=env,
                     label="identity probe", timeout=15.0)
     def probe(self, c):
         """prove whether the candidate c (x, y, heading) is ours: two turns on the spot in a random order of signs,
@@ -1481,7 +1488,8 @@ class Session:
         alert, no new probe at that place for PROBE_BAD_S s. Stopped by no information or
         another robot, or a child that did not complete its turn (a non-zero exit, a result line marked interrupted or
         aborted, none at all): no verdict, no alert, the hold goes on (after a child's abort, the next probe not before
-        PROBE_RETRY s); it still counts against `probes`.
+        PROBE_RETRY s); it still counts against `probes`. A child ending with a Python exception PROBE_EXC_N times in
+        a row with the same message is a set-up fault: probing ends for the session, one alert with the message.
         -> True on a pass"""
         self.probes_run += 1; self.probe_cand = None; L0 = self.ours_lost
         signs = random.sample((1.0, -1.0), 2); x0, y0 = c[0], c[1]
@@ -1504,12 +1512,19 @@ class Session:
             last = acc["last"]; turns.append((sg, acc["dth"], acc["moved"]))
             if acc["moved"] is not None: break
         at = f"({x0:+.2f}, {y0:+.2f})"; want = self.probe_rate * self.probe_time
+        exc = r.get("line") if child and self.PROBE_EXC.match(r.get("line") or "") else None     # a Python exception, not "not in vision"
+        self.probe_exc = None if exc is None else [exc, self.probe_exc[1] + 1 if self.probe_exc and self.probe_exc[0] == exc else 1]
         if why is not None:
             self.probe_none += 1; self.probe_none_why = why
             if child:                                  # the child aborted: no verdict, the next probe not before PROBE_RETRY s
                 self.probe_wait = self.clock() + self.PROBE_RETRY
                 self.log("probe_verdict", n=self.probes_run, ok=None, at=[round(x0, 3), round(y0, 3)], no_verdict=why)
             else: self.log("probe_stopped", n=self.probes_run, why=why)
+            if self.probe_exc and self.probe_exc[1] >= self.PROBE_EXC_N and not self.probe_off:
+                self.probe_off = exc; self.log("probe_off", why=exc, times=self.probe_exc[1])
+                self.alert(f"the identity probe cannot run: its child (characterize.py spin) failed {self.probe_exc[1]} times in a row with "
+                           f"{exc}: a set-up fault, no more probes this session; the session holds: {self.lost_tail()}", kind="probe_off", force=True)
+                return False
             self.probes_left_alert(); return False
         moved = math.hypot(last[0] - x0, last[1] - y0)
         ok = (len(turns) == 2 and moved < self.PROBE_MOVE and
@@ -2299,9 +2314,16 @@ class Session:
             return [str(v) for v in e(st["argv"])]
         return None
     def env_for(self, st, retry=False):
+        """the child's environment: this process's, the header's env, the step's env (a value None removes the
+        variable). characterize.py reads SOLO_BRAKE as a number: for a test step SOLO_BRAKE=auto is resolved the way
+        series.py does before any braking is measured (SOLO_BRAKE_FIRST, default 0.8)"""
         env = dict(os.environ)
         for src in (self.head.get("env", {}), st.get("env", {})):
-            for k, v in expand(src, self.vs).items(): env[k] = str(v)
+            for k, v in expand(src, self.vs).items():
+                if v is None: env.pop(k, None)
+                else: env[k] = str(v)
+        if st.get("kind") == "test" and env.get("SOLO_BRAKE") == "auto":
+            env["SOLO_BRAKE"] = str(float(env.get("SOLO_BRAKE_FIRST") or "0.8"))
         if retry:
             env["SOLO_BOX"] = widen(env.get("SOLO_BOX", ""))
             if self.home is not None and st.get("label") != "fetch the ball": env["SOLO_BOX"] = clip_rects(env["SOLO_BOX"], robot_area(self.home))
