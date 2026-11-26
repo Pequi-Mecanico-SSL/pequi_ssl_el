@@ -1,0 +1,10 @@
+{"label": "sentinel fwd 1.0 up (Y1)", "test": "step", "args": ["fwd", 1.0, -1.35, -1.15, 90, 1.2], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "sentinel fwd 1.0 down (Y1)", "test": "step", "args": ["fwd", 1.0, -1.35, 1.15, -90, 1.2], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp fwd 1.5 up (Y1)", "test": "step", "args": ["fwd", 1.5, -1.35, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp fwd 1.5 down (Y1)", "test": "step", "args": ["fwd", 1.5, -1.35, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp side 1.5 up (Y1)", "test": "step", "args": ["side", 1.5, -1.35, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp side 1.5 down (Y1)", "test": "step", "args": ["side", 1.5, -1.35, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp fwd 1.5 up repeat (Y1)", "test": "step", "args": ["fwd", 1.5, -1.35, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp fwd 1.5 down repeat (Y1)", "test": "step", "args": ["fwd", 1.5, -1.35, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp side 1.5 up repeat (Y1)", "test": "step", "args": ["side", 1.5, -1.35, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}
+{"label": "ramp side 1.5 down repeat (Y1)", "test": "step", "args": ["side", 1.5, -1.35, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.75,-0.95,-1.25,1.25", "settle": 1.0}

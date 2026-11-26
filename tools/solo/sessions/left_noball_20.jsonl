@@ -1,0 +1,16 @@
+# A 20-minute session in the left half of a shared field (x < 0), without the ball: left_noball.jsonl first, then the
+# remaining ramped runs and jumps, a coverage pass of the left half's weak and empty camera cells and a goto chain.
+# The coverage pass drives to 0.05 m inside the lines (by design); every other test stays 0.25 m inside.
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball_20.jsonl --budget 20
+{"kind": "session", "name": "left_noball_20", "budget_min": 20, "ball": "ignore", "home": "-2.2,-0.10,-1.45,1.45", "vars": {"P": "${T}/sessions/plans", "L": "${SOLO_DATA}/left"}, "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
+{"kind": "marker", "label": "start marker", "text": "left-half 20-minute session without the ball: start (auto_session)", "useful": "YES"}
+{"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}
+{"kind": "series", "label": "sentinel + ramped 1.5 m/s runs fwd and side, lane Y1 (plan left_A 1-8)", "plan": "${P}/left_A_ramped.jsonl", "max": 8, "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": "", "SOLO_RAMP": "1.7"}, "timeout": 360, "on_fail": "alert"}
+{"kind": "series", "label": "spins and gyro scale at S1 (plan left_C)", "plan": "${P}/left_C_spins.jsonl", "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": ""}, "timeout": 240, "on_fail": "alert"}
+{"kind": "series", "label": "command jumps, lane Y2 (plan left_B)", "plan": "${P}/left_B_jumps.jsonl", "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": ""}, "timeout": 280, "on_fail": "alert"}
+{"kind": "series", "label": "ramped side 1.5 repeats, lane Y1 (plan left_A from 9)", "plan": "${P}/left_A_ramped.jsonl", "from": 9, "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": "", "SOLO_RAMP": "1.7"}, "timeout": 120, "on_fail": "alert"}
+{"kind": "series", "label": "coverage pass: weak and empty cells of the left half (plan left_E)", "plan": "${P}/left_E_coverage.jsonl", "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": ""}, "timeout": 300, "on_fail": "alert"}
+{"kind": "series", "label": "goto chain for odometry (plan left_F)", "plan": "${P}/left_F_goto_chain.jsonl", "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": ""}, "timeout": 240, "on_fail": "alert"}
+{"kind": "series", "label": "sentinel again (plan left_G)", "plan": "${P}/left_G_sentinel.jsonl", "args": ["--out", "${L}/logs", "--results", "${L}/results.jsonl"], "env": {"SOLO_BOX": "", "SOLO_RAMP": "1.7"}, "timeout": 120, "on_fail": "alert"}
+{"kind": "marker", "label": "end marker", "text": "left-half 20-minute session without the ball: end (auto_session)", "useful": "NO", "final": true}
+{"kind": "cmd", "label": "save the robot log", "argv": ["${T}/robot_stack.sh", "save"], "final": true, "timeout": 90}
