@@ -108,8 +108,8 @@ def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps
     seen besides ours. -> (session, runner, notifier, clock, step starts, [(distance from the kept position, allowed)])"""
     D = {}
     def frames(t):
-        dt = t - D["t0"]; rs = []
-        if drop is None or not (drop[0] <= dt < drop[0] + drop[1]): rs.append(("blue", 3, *world.robot[:3]))
+        dt = t - D["t0"]; rs = []; c = world.coasting                 # a slide is seen frame by frame
+        if drop is None or not (drop[0] <= dt < drop[0] + drop[1]): rs.append(("blue", 3, *(coast_at(c, t) if c else world.robot[:2]), world.robot[2]))
         return {0: rs + (others(dt) if others else [])}
     s, run, note, world, clk = make_cams(steps or [dict(kind="goto", x=GOAL[0], y=GOAL[1], label="g"), SPIN(label="after")], frames,
                                          robot=(*START, 0.0), budget=budget, switch_after=0)
@@ -238,6 +238,59 @@ def test_a_twin_appearing_0_4_m_from_ours_during_a_stop_without_snapshots_is_two
     assert two and f"({tw[0]:+.2f}, {tw[1]:+.2f})" in two[0] and not s.not_ours, alerts(note)
     assert s.ours_lost is None and math.hypot(s.us_last["x"] - tw[0], s.us_last["y"] - tw[1]) > 0.3
     assert not [m for m in alerts(note) if "which robot is ours was lost" in m] and s.done == [1, 2]
+
+def blocked_session(frames, robot=(-1.0, 0.0)):
+    """our robot moving (a motion child runs) with a snapshot every 0.1 s for 1 s; then the child is stopped and the
+    supervisor takes no snapshot for 1.2 s, every camera frame of that time reaching the vision reader. frames(t, b)
+    -> robots of camera 0 at time t, b the time the block starts (None before). -> (session, world, clock, b)"""
+    B = {}
+    s, run, note, world, clk = make_cams([SPIN(label="a")], lambda t: {0: frames(t, B.get("b"))}, robot=(*robot, 0.0), budget=60)
+    world.vision.src.BACKLOG = 3.0
+    s.motion(True)
+    for _ in range(10): clk.t += 0.1; s.snap()
+    s.motion(False); B["b"] = clk.t; clk.t += 1.2
+    return s, world, clk, B["b"]
+
+def test_a_twin_appearing_while_ours_is_in_view_during_a_block_and_ours_dropping_out_after_is_never_taken_as_ours():
+    for dx in (0.25, 0.3, 0.4):                    # the twin at +0.3 s, ours not seen from +0.6 s, the twin stays
+        def frames(t, b):
+            return ([("blue", 3, -1.0, 0.0, 0.0)] if b is None or t < b + 0.6 else []) + \
+                   ([("blue", 3, -1.0 + dx, 0.0, 0.0)] if b is not None and t >= b + 0.3 else [])
+        s, world, clk, b = blocked_session(frames)
+        world.set(robot=(-1.0 + dx, 0.0, 0.0))     # the connector follows the only blue 3 it sees
+        for _ in range(6): q = s.snap(); clk.t += 0.1
+        assert s.twins_seen and s.ours_lost is not None and q["raw_us"] is None, dx
+        assert q["us_lost"].startswith("which robot is ours was lost: after two robots were seen as ours"), (dx, q["us_lost"])
+        assert abs(s.us_last["x"] + 1.0) < 1e-9 and abs(s.us_last["y"]) < 1e-9, (dx, s.us_last)
+
+def test_a_twin_appearing_in_the_frame_ours_drops_out_during_a_block_is_never_taken_as_ours():
+    for dx in (0.25, 0.4):
+        def frames(t, b):
+            return [("blue", 3, -1.0, 0.0, 0.0)] if b is None or t < b + 0.3 else [("blue", 3, -1.0 + dx, 0.0, 0.0)]
+        s, world, clk, b = blocked_session(frames)
+        world.set(robot=(-1.0 + dx, 0.0, 0.0))
+        for _ in range(6): q = s.snap(); clk.t += 0.1
+        assert s.twins_seen and s.ours_lost is not None and q["raw_us"] is None, dx
+        assert abs(s.us_last["x"] + 1.0) < 1e-9 and abs(s.us_last["y"]) < 1e-9, (dx, s.us_last)
+
+def test_our_robot_alone_braking_during_a_block_with_frame_jitter_and_missing_frames_is_kept_without_twins():
+    import random
+    v, react, decel = 1.0, 0.05, 2.5                # brakes 0.25 m after the stop
+    T = {}
+    def at(t, b):
+        if b is None or t < b: return (-1.6 + v * (t - T["0"]), 0.0)
+        tb = min(max(0.0, t - b - react), v / decel)
+        return (-1.6 + v * (b - T["0"]) + v * min(t - b, react) + v * tb - 0.5 * decel * tb * tb, 0.0)
+    def frames(t, b):
+        T.setdefault("0", t); n = round(t * 60); r = random.Random(n)
+        if n % 7 == 0: return []                    # a missing frame now and then
+        x, y = at(t, b); return [("blue", 3, x + r.uniform(-0.02, 0.02), y + r.uniform(-0.02, 0.02), 0.0)]
+    s, world, clk, b = blocked_session(frames, robot=(-1.6, 0.0))
+    end = at(b + 1.2, b)
+    assert abs(end[0] - at(b, b)[0] - 0.25) < 1e-9
+    world.set(robot=(*end, 0.0)); q = s.snap()
+    assert s.ours_lost is None and not s.twins_seen and q["us_lost"] is None and q["raw_us"] is not None
+    assert math.hypot(s.us_last["x"] - end[0], s.us_last["y"] - end[1]) <= 0.05 and s.us_last["t"] >= b + 1.1
 
 def test_a_3_s_dropout_during_a_strategy_step_ends_with_our_robot_proved_by_its_turn():
     st = dict(kind="strategy", on=True, seconds=6, side="negative", label="play")

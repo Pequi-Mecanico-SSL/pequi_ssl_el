@@ -695,7 +695,7 @@ class RawVision:
     NEAR_D of a sighting of another colour + id of the last PAIR_S (a robot whose id is read differently from frame
     to frame; the colour + id in `own`, our robot, does not confirm another); or one whose camera sends no newer
     frame within CONFIRM_S. A single isolated sighting is not confirmed.
-    own_track: [(age, x, y)] of every sighting of `own` (any camera) of the last OWN_HIST s, oldest first: the
+    own_track: [(age, x, y, camera)] of every sighting of `own` (any camera) of the last OWN_HIST s, oldest first: the
     supervisor follows our robot on these frames, also across the time it took no snapshot.
     thread=False: the source is read when a snapshot is taken (tests, simulated clock)"""
     def __init__(self, source, clock=time.time, keep=VISION_FRESH, thread=True, cameras=None):
@@ -735,7 +735,7 @@ class RawVision:
                 if not ok and k != self.own:
                     ok = any(k2 != k and math.hypot(x - x2, y - y2) <= self.NEAR_D for k2, ps2 in recent for x2, y2, _ in ps2 for x, y, _ in ps)
                 self.seen[(cam, k)] = (t, ps, ok)
-                if k == self.own: self.own_hist.extend((t, x, y) for x, y, _ in ps)
+                if k == self.own: self.own_hist.extend((t, x, y, cam) for x, y, _ in ps)
             while self.own_hist and self.own_hist[0][0] < t - self.OWN_HIST: self.own_hist.popleft()
     def snapshot(self):
         if not self.threaded:
@@ -752,7 +752,7 @@ class RawVision:
                      ok or (self.cam_t[c] == tt and t - tt >= self.CONFIRM_S - 1e-9)) for c, k, tt, ps, ok in live for x, y, _ in ps]
             poses = [(k[0], k[1], x, y, th, round(t - tt, 3)) for c, k, tt, ps, ok in live for x, y, th in ps if th is not None]
             unlisted = list(self.unlisted)
-            track = [(round(t - tt, 3), x, y) for tt, x, y in sorted(self.own_hist)]
+            track = [(round(t - tt, 3), x, y, c) for tt, x, y, c in sorted(self.own_hist)]
         ages = [cam_age.get(c, 1e9) for c in cams]; merged = merge_dets(dets, flags=True)
         return dict(vision_age=max(ages) if ages else 1e9, cam_age=cam_age, vision_dets=[d for d, ok in merged],
                     vision_unconfirmed=[d for d, ok in merged if not ok], vision_poses=poses, unlisted=unlisted, own_track=track)
@@ -1308,6 +1308,8 @@ class Session:
         elif not on and self.moving: self.moving = False; self.moves[-1][1] = now
     REAPPEAR_GAP = 0.5                  # s: our robot unseen this long (by detection times) is a reappearance, not continuity
     FOLLOW_GAP = 0.15                   # s: after two copies were seen, the one left continues ours only if the anchor followed it this recently
+    FRAME_S = 0.02                      # s: sightings of two cameras this close in time are of the same moment (one frame period at 60 Hz)
+    FOLLOW_FRAME = 0.04                 # s: after two copies, a sighting this soon after the anchor's continues our track (a frame or two)
     def may_move(self, t0, t1):
         """our robot may have been moving at some time within [t0, t1]: a motion child or the strategy node ran then,
         or stopped less than settle s before (reaction and braking). It says whether, not how far"""
@@ -1367,18 +1369,34 @@ class Session:
         colour + id, oldest first), so that the time the supervisor took no snapshot (a child being stopped, a sleep)
         is not counted as our robot unseen: from the anchor forward, each sighting within ID_TIGHT plus max_speed x the
         time since the anchor's (when it may have been moving) moves the anchor to it; a sighting REAPPEAR_GAP s or
-        more after the anchor's is a real gap and is left to track_us (reappearance), as is any sighting after two
-        copies were seen that comes more than FOLLOW_GAP s after the anchor's. Sightings farther away (another copy)
-        are skipped; while identity is lost the anchor stays"""
+        more after the anchor's is a real gap and is left to track_us (reappearance). Two sightings of the same moment
+        (one camera's frame, or two cameras' within FRAME_S s) farther apart than the merge allowance (merge_dets) are
+        two copies, as is a sighting within FOLLOW_FRAME s of the anchor's that ours cannot have reached: twins_seen is
+        set as a snapshot showing both would set it, and from then on only a sighting within FOLLOW_FRAME s of the
+        anchor's continues it; at a longer gap in our track the anchor stays where ours was last and track_us decides.
+        Sightings farther away (another copy) are skipped; while identity is lost the anchor stays. Two sightings of
+        one camera in different frames within the reach of ours are one robot moving"""
         p = self.us_last
         if not track or p is None or self.ours_lost is not None: return
         now = self.clock(); x, y, t = p["x"], p["y"], p["t"]
-        for age, qx, qy in track:
+        def two(tq, a, b):                                          # two copies in the frames between snapshots
+            self.twins_seen = True
+            self.log("twins_seen", ago=round(now - tq, 3), at=[[round(v, 3) for v in a], [round(v, 3) for v in b]],
+                     note="two robots of our colour + id in the camera frames between snapshots")
+        for k, (age, qx, qy, cam) in enumerate(track):
             tq = now - age; dt = tq - t
+            if tq < p["t"] - 0.002: continue                       # before the anchor (ages are rounded to ms)
+            if not self.twins_seen:
+                for a2, x2, y2, c2 in reversed(track[:k]):
+                    ddt = a2 - age
+                    if ddt > self.FRAME_S: break
+                    if (c2 == cam and ddt > 1e-6) or now - a2 < p["t"] - 0.002: continue
+                    if math.hypot(x2 - qx, y2 - qy) > min(MERGE_D + MERGE_SPEED * ddt, MERGE_CAP): two(tq, (x2, y2), (qx, qy)); break
             if dt <= 0: continue
-            if dt >= self.REAPPEAR_GAP or (self.twins_seen and dt > self.FOLLOW_GAP): break
+            if dt >= self.REAPPEAR_GAP or (self.twins_seen and dt > self.FOLLOW_FRAME): break
             lim = self.ID_TIGHT + (self.max_speed * dt if self.may_move(t, tq) else 0.0)
             if math.hypot(qx - x, qy - y) <= lim: x, y, t = qx, qy, tq
+            elif dt <= self.FOLLOW_FRAME and not self.twins_seen: two(tq, (x, y), (qx, qy))   # ours cannot be there yet
         if t > p["t"]: self.keep_us((None, None, x, y, now - t), now, alone=False)
     def keep_us(self, d, now, alone):
         """our robot's last unambiguous position from detection d (kept with the detection's time)"""
