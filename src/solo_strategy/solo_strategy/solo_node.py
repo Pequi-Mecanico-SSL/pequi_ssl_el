@@ -365,7 +365,9 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.pub.publish(Twist())
+        for _ in range(5):                  # zeros over 0.2 s: one lost message does not leave the last command standing
+            node.pub.publish(Twist())
+            time.sleep(0.05)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
