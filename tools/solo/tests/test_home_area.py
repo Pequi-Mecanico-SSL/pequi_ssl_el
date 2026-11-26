@@ -10,13 +10,13 @@ HOME = "-2.2,-0.10,-1.45,1.45"
 SPIN = lambda **kw: dict(kind="test", test="spin", args=[3.0], env={"SOLO_BOX": "-1.4,-0.6,-0.4,0.4"}, **kw)
 
 
-def make(steps, script=(), robot=(-1.0, 0.0, 0.0), ball=(-1.2, 0.8), timeline=(), others=(), budget=1800.0, head=None, **kw):
+def make(steps, script=(), robot=(-1.0, 0.0, 0.0), ball=(-1.2, 0.8), timeline=(), others=(), budget=1800.0, head=None, vs=None, **kw):
     clk = A.SimClock()
     world = A.ScriptedWorld(clk, robot=robot, ball=ball, timeline=[(clk.t + dt, ch) for dt, ch in timeline], others=others)
     procs = A.SimProcs(); strat = A.SimStrategy(procs); run = A.SimRunner(clk, world, script); note = A.SimNotifier()
     for i, st in enumerate(steps, 1): st.setdefault("n", i)
     kw.setdefault("home", HOME); kw.setdefault("our_id", 0)
-    s = A.Session("blue", steps, head=head, world=world, runner=run, notifier=note, procs=procs, strategy=strat, clock=clk,
+    s = A.Session("blue", steps, head=head, vs=vs, world=world, runner=run, notifier=note, procs=procs, strategy=strat, clock=clk,
                   sleep=clk.sleep, budget_s=budget, echo=False, **kw)
     return s, run, note, world, strat, clk
 
@@ -65,7 +65,8 @@ def test_intruder_during_a_step_stops_it_at_once_alerts_once_and_repeats_it():
 
 def test_intruder_that_stays_gets_a_second_alert_and_no_motion():
     steps = [SPIN(label="spin"), SPIN(label="spin 2")]
-    s, run, note, world, strat, clk = make(steps, timeline=[(1.0, dict(others=[("blue3", -1.5, -0.8)]))], budget=300)
+    s, run, note, world, strat, clk = make(steps, timeline=[(1.0, dict(others=[("blue3", -1.5, -0.8)]))], budget=300,
+                                           switch_after=0)                                   # no switch of halves here
     s.run()
     a = alerts(note)
     assert len(a) == 3 and "entered our half" in a[0] and "still in our half" in a[1] and "reminder 2/3" in a[1]   # at 120 and 240 s
@@ -74,7 +75,8 @@ def test_intruder_that_stays_gets_a_second_alert_and_no_motion():
 
 def test_intruder_between_steps_holds_the_next_step():
     steps = [SPIN(label="a"), dict(kind="wait", seconds=3), SPIN(label="b")]
-    s, run, note, world, strat, clk = make(steps, timeline=[(6.0, dict(others=[("yellow0", -1.8, 1.0)])), (40.0, dict(others=[]))])
+    s, run, note, world, strat, clk = make(steps, timeline=[(6.0, dict(others=[("yellow0", -1.8, 1.0)])), (40.0, dict(others=[]))],
+                                           switch_after=0)
     t0 = clk.t; s.run()
     a = alerts(note)
     assert len(a) == 1 and "entered our half at (-1.80, +1.00); our robot waits at" in a[0]
@@ -350,3 +352,94 @@ def test_load_checks_no_ball_cmd_resume_and_parking(tmp_path):
     assert "parking spot" in s.steps[0]["_refused"]
     s, *_ = make([dict(kind="cmd", argv=["/x/drive.sh"])], home=None)
     assert "_refused" not in s.steps[0] and s.steps[0]["_unchecked"].startswith("UNCHECKED")
+
+
+# ---- the other half: mirroring and switching halves
+SESS = os.path.join(os.path.dirname(HERE), "sessions")
+
+def test_mirroring_twice_returns_the_original():
+    assert A.mirror_dir(90) == 90 and A.mirror_dir(0) == 180 and A.mirror_dir(-95) == -85 and A.mirror_dir(45) == 135
+    for d in (-180, -95, -90, 0, 5, 45, 90, 135, 180): assert A.mirror_dir(A.mirror_dir(d)) == A.mirror_dir(A.mirror_dir(A.mirror_dir(A.mirror_dir(d))))
+    assert A.mirror_spec("-2.2,-0.10,-1.45,1.45;-1,-0.5,0,1") == "0.1,2.2,-1.45,1.45;0.5,1,0,1"
+    import json
+    for f in sorted(os.listdir(os.path.join(SESS, "plans"))):
+        for l in open(os.path.join(SESS, "plans", f)):
+            if l.strip() and not l.startswith("#"):
+                e = json.loads(l); m = A.mirror_plan_line(e)
+                assert _norm(A.mirror_plan_line(m)) == _norm(e) and (_norm(m) != _norm(e)), (f, l)
+
+def _norm(e):
+    """numbers rounded, boxes as rectangles"""
+    def r(v): return [r(x) for x in v] if isinstance(v, list) else (round(float(v), 4) if isinstance(v, (int, float)) else v)
+    return {k: (A.rects(v) if k in ("box", "brake_box") else r(v)) for k, v in e.items()}
+
+def test_mirrored_step_round_trip_and_side(tmp_path):
+    st = dict(kind="strategy", on=True, seconds=10, side="negative", end_ball_out="-2,-0.5,-1,1", n=3)
+    m = A.mirror_step(st)
+    assert m["side"] == "positive" and m["end_ball_out"] == "0.5,2,-1,1" and A.mirror_step(m)["side"] == "negative"
+    st = dict(kind="test", test="ram", args=[1.2, -95, 0.7, 0.2], env={"SOLO_BOX": "-1.45,-0.40,-1.30,1.30", "SOLO_RAMP": "1.7"})
+    m = A.mirror_step(st)
+    assert m["args"] == [1.2, -85.0, 0.7, 0.2] and m["env"] == {"SOLO_BOX": "0.4,1.45,-1.3,1.3", "SOLO_RAMP": "1.7"}
+    assert A.mirror_step(m)["args"] == [1.2, -95.0, 0.7, 0.2]
+
+def test_every_shipped_left_session_mirrors_into_the_right_half_and_passes_the_load_check(tmp_path):
+    for f in ("left_noball.jsonl", "left_noball_20.jsonl", "left_ball_slot_10.jsonl"):
+        head, steps, vs = A.load_session(os.path.join(SESS, f), "blue", dict(OUT=str(tmp_path)))
+        mh = A.mirror_head(head); ms = [A.mirror_step(st, str(tmp_path / "mirrored"), vs) for st in steps]
+        s = A.Session("blue", ms, head=mh, vs=vs, echo=False, home=A.home_rect(mh["home"]), our_id=0)
+        assert A.half_name(s.home) == "+x" and not [st.get("_refused") for st in s.steps if st.get("_refused")], f
+        assert open(os.path.join(SESS, "plans", "left_A_ramped.jsonl")).read().count("-1.35") >= 1      # the shipped plan is unchanged
+
+def far_intruder(t=2.0):
+    return (t, dict(others=[("yellow2", -1.8, 1.0)]))                 # inside the -x half, away from the way over
+
+def test_intruder_stays_and_the_other_half_is_empty_one_switch_and_mirrored_steps(tmp_path):
+    steps = [SPIN(label="a"), SPIN(label="b")]
+    s, run, note, world, strat, clk = make(steps, timeline=[far_intruder()], vs=dict(OUT=str(tmp_path)), budget=200)
+    s.vs.update(TEAM="blue")
+    s.run()
+    assert len(s.switches) == 1 and note.quiet == ["moved to the +x half: another robot (yellow 2) stayed in the -x half for 20 s"]
+    ch = [c for c in run.calls if "characterize.py" in c["cmd"]]
+    assert len(ch) == 3 and ch[0]["env"]["SOLO_BOX"] == "-1.4,-0.6,-0.4,0.4" and run.stops      # a: stopped by the intruder
+    assert all(c["env"]["SOLO_BOX"] == "0.6,1.4,-0.4,0.4" for c in ch[1:]) and s.done == [1, 2]    # a again and b, mirrored
+    assert run.cmds("goto.py blue 0.4 0.0") and A.half_name(s.home) == "+x" and all(c["watched"] for c in run.calls)
+
+def test_intruder_stays_and_the_other_half_is_occupied_no_switch():
+    s, run, note, world, strat, clk = make([SPIN()], timeline=[(2.0, dict(others=[("yellow2", -1.8, 1.0), ("yellow1", 1.2, 0.5)]))], budget=120)
+    s.run()
+    assert s.switches == [] and note.quiet == [] and len(run.cmds("characterize.py")) == 1 and run.stops and s.done == []
+
+def test_other_half_empty_only_briefly_no_switch():
+    tl = [(1.0, dict(others=[("yellow2", -1.8, 1.0), ("yellow1", 1.2, 0.5)])), (10.0, dict(others=[("yellow2", -1.8, 1.0)])),
+          (25.0, dict(others=[("yellow2", -1.8, 1.0), ("yellow1", 1.2, 0.5)]))]
+    s, run, note, *_ = make([SPIN()], timeline=tl, budget=45)
+    s.run()
+    assert s.switches == []
+
+def test_no_information_about_the_other_half_no_switch():
+    s, run, note, *_ = make([SPIN()], timeline=[far_intruder(1.0), (5.0, dict(vision=False))], budget=80)
+    s.run()
+    assert s.switches == [] and any(m.startswith("no vision for") for m in note.sent)
+
+def test_cooldown_and_the_switch_limit(tmp_path):
+    tl = [far_intruder(1.0), (40.0, dict(others=[("yellow2", 1.8, 1.0)])), (300.0, dict(others=[]))]
+    s, run, note, world, strat, clk = make([SPIN(), SPIN()], timeline=tl, vs=dict(OUT=str(tmp_path)), budget=400)
+    t0 = clk.t; s.run()
+    assert len(s.switches) == 2 and s.switches[1] - s.switches[0] >= 60.0 and s.switches[0] - t0 < 30
+    s, run, note, world, strat, clk = make([SPIN(), SPIN()], timeline=tl, vs=dict(OUT=str(tmp_path)), budget=400, max_switches=1)
+    s.run()
+    assert len(s.switches) == 1 and any("no more switches" in m for m in note.sent)
+
+def test_a_ball_session_fetches_the_ball_into_the_new_half_after_the_switch(tmp_path):
+    steps = [dict(kind="place", x=-0.9, y=-0.3, env={"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, label="p")]
+    s, run, note, world, strat, clk = make(steps, ball=(-0.5, -0.5), timeline=[far_intruder(0.5)], park=(-0.85, 0.0), vs=dict(OUT=str(tmp_path)), budget=200)
+    s.run()
+    assert len(s.switches) == 1 and run.cmds("place_ball.py blue 0.85 0.0") and run.cmds("place_ball.py blue 0.9 -0.3")
+
+def test_home_auto_at_start_in_its_three_cases():
+    s, run, *_ = make([SPIN()], home_auto=True)
+    s.run(); assert A.half_name(s.home) == "-x" and len(run.cmds("characterize.py")) == 1
+    s, run, *_ = make([SPIN()], home_auto=True, others=[("yellow2", -1.8, 1.0)])
+    s.run(); assert A.half_name(s.home) == "+x" and run.cmds("goto.py blue 0.4 0.0") and len(run.cmds("characterize.py")) == 1
+    s, run, note, *_ = make([SPIN()], home_auto=True, others=[("yellow2", -1.8, 1.0), ("yellow1", 1.2, 0.5)], budget=60)
+    s.run(); assert run.calls == [] and alerts(note)[0].startswith("both halves hold other robots (yellow 2, yellow 1)")

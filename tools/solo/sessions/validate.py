@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check series.py plans and auto_session.py sessions without running anything (numpy only, no ROS).
     python3 tools/solo/sessions/validate.py [--map MAP.npz] [--home x0,x1,y0,y1] FILE.jsonl ...
+Every file is checked as written and mirrored into the other half (x -> -x, see auto_session.mirror_step).
 FILE is a plan (lines with "test") or a session (a first line with "kind": "session"; its "home" applies unless --home
 is given). --map defaults to $SOLO_DATA/vision_map/map.npz (the camera coverage map of vision_map.py); without a map
 the coverage checks are skipped ("coverage not checked (no map)") and the rest runs.
@@ -72,7 +73,7 @@ def ram_rests(spot, v, d):
 def where(p, home):
     c = A.ball_class(p)[0]
     if c in ("goal", "corner", "frame", "wall"): return c
-    if home is not None and not A.in_rect(p, A.ball_area(home)): return "other half" if p[0] > home[1] else "outside home"
+    if home is not None and not A.in_rect(p, A.ball_area(home)): return "other half" if (p[0] > home[1] or p[0] < home[0]) else "outside home"
     return c
 
 def placer_ok(b, spot):
@@ -114,13 +115,19 @@ def check_plan(path, vm, home):
         print(f"  {os.path.basename(path)}:{n} {e.get('label', '')[:36]:36s} {' '.join(flags)} {coverage(vm, pts)}{'; ' + '; '.join(notes) if notes else ''}")
 
 # ------------------------------------------------------------------ sessions
-def check_session(path, vm, home_opt):
+def check_session(path, vm, home_opt, mirror_dir=None):
+    """mirror_dir: check the session mirrored into the other half (its plans written mirrored there)"""
     head, steps, vs = A.load_session(path, "blue")
     home = A.home_rect(home_opt if home_opt is not None else head.get("home", ""))
+    mx = (lambda p: (-p[0], p[1])) if mirror_dir else (lambda p: p)
+    if mirror_dir:
+        head = A.mirror_head(head); steps = [A.mirror_step(st, mirror_dir, vs) for st in steps]; home = A.mirror_rect(home) if home else None
+        if home_opt is None and head.get("home"): home = A.home_rect(head["home"])
+        print(f"  mirrored into the {A.half_name(home)} half (plans in {mirror_dir})")
     s = A.Session("blue", steps, head, vs, home=home, echo=False)
     print(f"  session {head.get('name', '')}: {len(steps)} steps, home {home}, {'no ball' if s.no_ball else 'ball'}; parking spot {s.park}")
     expect = [s.park] if s.park else []       # where the ball may be before the next placement
-    expect += [(-1.0, 1.0), (-1.6, -0.9), (-0.5, 0.0)] if home else []
+    expect += [mx(p) for p in [(-1.0, 1.0), (-1.6, -0.9), (-0.5, 0.0)]] if home else []
     last_spot = None
     for st in steps:
         k = st["kind"]; tag = f"  {st.get('n'):>3} {k:8s} {st.get('label', '')[:44]:44s}"
@@ -167,7 +174,7 @@ def check_session(path, vm, home_opt):
             if home is not None and not st.get("side"): flags.append(bad("no side"))
             if str(prm.get("foe_all", "false")).lower() == "true": flags.append(bad("foe_all true: robots of our colour would count as opponents"))
             print(tag, f"side {st.get('side')} params {prm} {st.get('seconds')} s" + (f", ends when the ball leaves {st['end_ball_out']}" if st.get("end_ball_out") else ""), *flags)
-            expect = [(-1.2, 0.0), (-0.8, 0.6), (-0.8, -0.6), (-1.6, 0.9), (-1.6, -0.9)]   # after the strategy: anywhere in the half
+            expect = [mx(p) for p in [(-1.2, 0.0), (-0.8, 0.6), (-0.8, -0.6), (-1.6, 0.9), (-1.6, -0.9)]]   # after the strategy: anywhere in the half
         elif k == "series":
             print(tag, f"plan {os.path.basename(A.expand(st['plan'], vs))}: {len(st.get('_boxes') or [])} tests, areas inside the home area")
         elif k in A.MOTION:
@@ -180,11 +187,18 @@ def main():
     if not args: sys.exit(__doc__)
     vm = V.load(mp)
     if not vm.ok: vm = None; print("coverage not checked (no map)")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="validate_mirrored_")          # both halves: the mirrored plans are written here
     for f in args:
         first = next((l for l in open(f) if l.strip() and not l.lstrip().startswith("#")), "{}")
         print(f.split("tools/solo/")[-1])
-        if json.loads(first).get("kind") == "session": check_session(f, vm, home)
-        else: check_plan(f, vm, A.home_rect(home) if home else None)
+        if json.loads(first).get("kind") == "session":
+            check_session(f, vm, home); check_session(f, vm, home, mirror_dir=tmp)
+        else:
+            h = A.home_rect(home) if home else None
+            check_plan(f, vm, h)
+            m = A.mirror_step(dict(kind="series", plan=f), tmp)["plan"]
+            print(f"  mirrored ({m.split('/')[-1]}):"); check_plan(m, vm, A.mirror_rect(h) if h else None)
     print("problems:", problems); sys.exit(1 if problems else 0)
 
 if __name__ == "__main__":

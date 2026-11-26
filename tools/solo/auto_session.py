@@ -108,6 +108,17 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   home area has been known and clear for --clear s. A robot seen again within that time restarts the count; no
   information for --info-alert s sends "no vision for N s: the session holds". After a stopped fetch our robot drives
   back only once its surroundings or its way back have been clear for --clear s; else alert and wait.
+  Switching halves: a session is written for the -x half (its "home"); every coordinate in it is mirrored at run time
+  (x -> -x; boxes, plan lines, goto points, placement and parking spots, ram and step directions d -> 180 - d, the
+  strategy side negative <-> positive; spin rates are kept; mirrored plans go to OUT/mirrored, the shipped ones are
+  not changed). While the session holds for another robot inside our half: when that half has held a robot for
+  --switch-after s (20; 0 = never; gaps under 1 s do not count), the other half has been known and empty of every robot
+  but ours for that whole time, and the way over has been clear (--corridor) for --clear s, the home area becomes the
+  other half; our robot drives to 0.3 m inside it (watched), a ball outside it is fetched as usual, the interrupted
+  step is repeated there, steps done are not repeated. Not within --switch-cooldown s (60) of the last switch; after
+  --max-switches (4) one alert and the session holds. Each switch is one quiet notice (SOLO_NOTICE_CMD, called as
+  `CMD "message" "title"`; unset: a log line). --home auto: at start the half our robot stands in when no other robot
+  is in it, else the other half when that one is empty, else hold (one alert). The dry run lists both halves.
   Strategy steps: {"kind": "strategy", "on": true, "seconds": 10, "side": "negative", "params": {"force_state":
   "running", "foe_all": false}, "end_ball_out": "x0,x1,y0,y1", "edge_guard": 1.0}: the saved node line with those -p
   parameters replaced or added (checked by procs.check_node_cmd); nothing is restored afterwards. The node is switched
@@ -312,6 +323,89 @@ def fetch_area(home, lim):
 
 def ball_in_box(b, spec, pad=0.15):
     return b is not None and any(r[0] - pad <= b[0] <= r[1] + pad and r[2] - pad <= b[1] <= r[3] + pad for r in rects(spec))
+
+# ------------------------------------------------------------------ the other half: mirroring a session (x -> -x)
+SIDE_SWAP = {"negative": "positive", "positive": "negative"}
+_r4 = lambda v: round(float(v), 4) + 0.0
+
+def mirror_dir(d):
+    """a direction (deg) mirrored across the y axis: 180 - d, in (-180, 180]"""
+    v = (180.0 - float(d) + 180.0) % 360.0 - 180.0
+    return _r4(180.0 if v == -180.0 else v)
+
+def mirror_rect(r):
+    return [_r4(-r[1]), _r4(-r[0]), _r4(r[2]), _r4(r[3])]
+
+def mirror_spec(spec):
+    """a SOLO_BOX spec "x0,x1,y0,y1;..." mirrored ("" stays "")"""
+    return ";".join(",".join(f"{v:g}" for v in mirror_rect(r)) for r in rects(spec)) if spec else spec
+
+def mirror_args(test, args):
+    """a characterize.py test's arguments mirrored: positions x -> -x, directions d -> 180 - d (spin rates kept)"""
+    a = list(args)
+    if test == "step" and len(a) >= 5: a[2] = _r4(-float(a[2])); a[4] = mirror_dir(a[4])
+    elif test == "ram" and len(a) >= 2: a[1] = mirror_dir(a[1])
+    elif test == "goto" and len(a) >= 3: a[0] = _r4(-float(a[0])); a[2] = mirror_dir(a[2])
+    elif test == "goto" and len(a) >= 2: a[0] = _r4(-float(a[0]))
+    elif test == "sweep" and len(a) >= 2: a[0], a[1] = _r4(-float(a[1])), _r4(-float(a[0]))
+    return a
+
+def mirror_pose(p):
+    """[x, y] or [x, y, dir_deg] mirrored"""
+    q = [_r4(-float(p[0])), _r4(p[1])]
+    return q + [mirror_dir(p[2])] if len(p) > 2 else q
+
+def mirror_plan_line(e):
+    """one series.py plan line mirrored (box, brake_box, at, spot, back, args)"""
+    e = dict(e)
+    for k in ("box", "brake_box"):
+        if e.get(k): e[k] = mirror_spec(e[k])
+    for k in ("at", "spot", "back"):
+        if e.get(k): e[k] = mirror_pose(e[k])
+    if "args" in e: e["args"] = mirror_args(e.get("test"), e["args"])
+    return e
+
+MIRROR_ENV = ("SOLO_BOX", "SOLO_BRAKE_BOX")
+
+def mirror_env(env):
+    return {k: (mirror_spec(v) if k in MIRROR_ENV and isinstance(v, str) and "$" not in v else v) for k, v in (env or {}).items()}
+
+def mirror_step(st, plan_dir=None, vs=None):
+    """a session step mirrored into the other half; a series step's plan is written mirrored to plan_dir (the shipped
+    plan is never changed). Internal marks of the load-time check (_boxes, _refused, _unchecked) are dropped"""
+    m = {k: v for k, v in st.items() if k not in ("_boxes", "_refused", "_unchecked")}
+    if "env" in m: m["env"] = mirror_env(m["env"])
+    if m.get("keep_ball_out"): m["keep_ball_out"] = mirror_spec(m["keep_ball_out"])
+    if m.get("end_ball_out"): m["end_ball_out"] = mirror_spec(m["end_ball_out"])
+    if m.get("park"): m["park"] = mirror_pose(m["park"])
+    k = m["kind"]
+    if k in ("place", "goto"): m["x"] = _r4(-float(m["x"]))
+    if k == "test": m["args"] = mirror_args(m.get("test"), m.get("args", []))
+    if k == "strategy" and m.get("side") in SIDE_SWAP: m["side"] = SIDE_SWAP[m["side"]]
+    if k == "series":
+        src = expand(m["plan"], vs or {}); m["plan_canonical"] = st.get("plan_canonical", src)
+        if plan_dir is None: raise ValueError("a series step needs a folder for its mirrored plan")
+        os.makedirs(plan_dir, exist_ok=True)
+        base = os.path.basename(src); base = base[:-len("_mx.jsonl")] + ".jsonl" if base.endswith("_mx.jsonl") else base[:-6] + "_mx.jsonl"
+        dst = os.path.join(plan_dir, base); out = []
+        for l in open(src):
+            s = l.strip()
+            if not s or s.startswith("#"): out.append(l.rstrip("\n")); continue
+            out.append(json.dumps(mirror_plan_line(json.loads(s))))
+        with open(dst, "w") as f: f.write("\n".join(out) + "\n")
+        m["plan"] = dst
+    m["_half"] = -st.get("_half", 1)
+    return m
+
+def mirror_head(head):
+    h = dict(head)
+    if h.get("home"): h["home"] = ",".join(f"{v:g}" for v in mirror_rect(home_rect(h["home"])))
+    if h.get("park"): h["park"] = mirror_pose(h["park"])
+    if "env" in h: h["env"] = mirror_env(h["env"])
+    return h
+
+def half_name(home):
+    return "+x" if home[0] + home[1] > 0 else "-x"
 
 
 # ------------------------------------------------------------------ processes (the checks are in procs.py)
@@ -631,8 +725,14 @@ class Runner:
 
 
 class Notifier:
-    def __init__(self, cmd=None):
+    """alerts through SOLO_NOTIFY_CMD; quiet notices through SOLO_NOTICE_CMD (optional: unset = a log line only)"""
+    def __init__(self, cmd=None, notice_cmd=None):
         self.cmd = cmd if cmd is not None else os.environ.get("SOLO_NOTIFY_CMD", "")
+        self.notice_cmd = notice_cmd if notice_cmd is not None else os.environ.get("SOLO_NOTICE_CMD", "")
+    def notice(self, msg, title):
+        if not self.notice_cmd: print(f"notice: {title}: {msg}", flush=True); return "log only (SOLO_NOTICE_CMD not set)"
+        try: return f"rc {subprocess.run([self.notice_cmd, msg, title], capture_output=True, text=True, timeout=30).returncode}"
+        except Exception as e: return f"error {e}"
     def send(self, msg, title):
         if not self.cmd:
             print(f"\n*** ALERT (SOLO_NOTIFY_CMD not set): {title}: {msg}\n", flush=True); return "not set"
@@ -673,7 +773,10 @@ class Session:
                  ball_lost=5.0, robot_lost=2.0, robot_wait=10.0, busy_wait=20.0, realert=180.0, max_alerts=3, echo=True,
                  home=None, no_ball=None, corridor=0.7, fetch_wait=60.0, fetch_tries=3, park=None, intrude_dist=1.0,
                  clear_s=5.0, hold_limit=120.0, ball_hold=30.0, ball_guard=0.6, edge_guard=0.9, our_id=None, vision_error=None,
-                 robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0):
+                 robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0, switch_after=20.0, switch_cooldown=60.0, max_switches=4,
+                 home_auto=False):
+        self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
+        self.home_auto = home_auto; self.switches = []; self.notices = []; self.pending = None; self.current = None
         self.our_id = None if our_id is None else int(our_id); self.vision_error = vision_error
         self.robot_fresh, self.info_alert, self.fetch_limit = robot_fresh, info_alert, fetch_limit; self.not_ours = None
         self.team = team; self.steps = steps; self.head = head or {}; self.vs = vs or dict(TEAM=team, T=HERE, SOLO_DATA=data_dir())
@@ -705,6 +808,10 @@ class Session:
     def alert(self, msg, title="field session"):
         self.alerts.append(msg); r = self.notifier.send(msg, title) if self.notifier else "no notifier"
         self.log("alert", message=msg, title=title, sent=r)
+    def notice(self, msg, title="field session"):
+        """a quiet notice (SOLO_NOTICE_CMD; unset: the log line only)"""
+        r = self.notifier.notice(msg, title) if self.notifier is not None and hasattr(self.notifier, "notice") else "log only"
+        self.notices.append(msg); self.log("notice", message=msg, title=title, sent=r)
     def marker(self, text, data):
         """a line in the events file: data "use" (the recordings from here on are test data) or "skip" (they are not)"""
         line = dict(to=None, state=text, data=data, source="auto_session")
@@ -827,9 +934,9 @@ class Session:
             for e in lines[first - 1:last]: out += rects(e.get("box", "")) or box or [CHAR_AREA]
             return out, None
         return None, None
-    def prepare(self):
+    def prepare(self, steps=None):
         """mark the steps the session refuses (st["_refused"]) and keep every motion step's area (st["_boxes"])"""
-        for st in self.steps:
+        for st in (self.steps if steps is None else steps):
             why = None
             if self.no_ball and (st["kind"] == "place" or st.get("needs_ball") or st.get("park")
                                  or (st["kind"] == "strategy" and st.get("on", True)) or (st["kind"] == "test" and st.get("test") == "ram")
@@ -859,7 +966,7 @@ class Session:
                         if bad: why = f"its area {','.join(f'{v:g}' for v in bad[0])} is not inside the home area {','.join(f'{v:g}' for v in self.home)}"
             if why: st["_refused"] = why
         if self.home is not None and self.park is not None and not in_rect(self.park, robot_area(self.home)):
-            for st in self.steps: st.setdefault("_refused", f"the session's parking spot {self.park} is not inside the home area")
+            for st in (self.steps if steps is None else steps): st.setdefault("_refused", f"the session's parking spot {self.park} is not inside the home area")
     def plan_has_ram(self, st):
         """a series plan with a ram line (JSON "test": "ram" or the argument form "ram ..."); unreadable = True"""
         def ram(l):
@@ -912,11 +1019,13 @@ class Session:
             what = "entered our half" if how == "inside" else f"came within {how:.2f} m of our robot"
             self.alert(f"another robot ({self.who(name)}) {what} at ({x:+.2f}, {y:+.2f}); our robot " + ("stopped" if during else "waits") + f" at {rb}"); n = 1
         t_seen = self.clock(); t_ni = None; ni_sent = False; self.motion_halted = True
+        sw = dict(t_in=None, last=-1e9, other_bad=self.clock(), corr_bad=self.clock(), limit_sent=False)
         while not self.out_of_time():
             s = self.look(); now = self.clock()
             mm = self.mismatch(s)
             if mm: self.on_mismatch(mm); return False
             ni = self.no_info(s); ww = [] if ni else self.intrusion(s)
+            if self.switch_rule(s, ni, ww, now, sw): self.motion_halted = False; return False
             if ni:
                 t_seen = now; t_ni = now if t_ni is None else t_ni
                 if not ni_sent and now - t_ni >= self.info_alert: ni_sent = True; self.alert(f"{ni}: the session holds")
@@ -930,6 +1039,61 @@ class Session:
                 self.alert(f"another robot ({self.who(ww[0][0])}) still in our half at ({ww[0][1]:+.2f}, {ww[0][2]:+.2f}) after {now - inc['since']:.0f} s: the session keeps holding (reminder {n}/{self.max_alerts})")
             self.sleep(0.2)
         self.motion_halted = False
+        return False
+    def switch_rule(self, s, ni, ww, now, sw):
+        """while holding: our half held by another robot for switch_after s without a break (gaps under 1 s), the other
+        half known and empty of every robot but ours for that whole time and the way there clear for clear_s -> switch
+        halves (-> True). Not within switch_cooldown s of the last switch; after max_switches: alert once, hold"""
+        if self.switch_after is None or self.home is None: return False
+        inside = [q for q in ww if q[3] == "inside"]
+        if inside:
+            if sw["t_in"] is None or now - sw["last"] > 1.0: sw["t_in"] = now
+            sw["last"] = now; sw["who"] = inside[0][0]
+        elif ni or now - sw["last"] > 1.0: sw["t_in"] = None
+        other = mirror_rect(self.home); p = self.our_pos(s)
+        if ni or any(in_rect((x, y), other) for _, x, y in s.get("others") or ()): sw["other_bad"] = now
+        if ni or p is None or blockers(s.get("others"), [(p, into(other, p))], self.corridor): sw["corr_bad"] = now
+        if sw["t_in"] is None or now - sw["t_in"] < self.switch_after or now - sw["other_bad"] < self.switch_after: return False
+        if now - sw["corr_bad"] < self.clear_s: return False                 # the way over is not clear: hold, re-evaluate
+        if len(self.switches) >= self.max_switches:
+            if not sw["limit_sent"]:
+                sw["limit_sent"] = True
+                self.alert(f"our robot changed halves {len(self.switches)} times: no more switches; the session holds in the {half_name(self.home)} half")
+            return False
+        if self.switches and now - self.switches[-1] < self.switch_cooldown: return False
+        self.switch_half(f"another robot ({self.who(sw['who'])}) stayed in the {half_name(self.home)} half for {now - sw['t_in']:.0f} s")
+        return True
+    def plan_dir(self):
+        return os.path.join(self.vs.get("OUT") or os.path.join(data_dir(), "sessions"), "mirrored")
+    def mirror_all(self):
+        """the home area, the parking spot and every step still to run mirrored into the other half"""
+        self.home = mirror_rect(self.home); pd = self.plan_dir()
+        if self.park is not None: self.park = tuple(mirror_pose(self.park))
+        if self.pending is not None: self.pending[:] = [mirror_step(st, pd, self.vs) for st in self.pending]
+        if self.current is not None: self.current = mirror_step(self.current, pd, self.vs)
+        self.prepare((self.pending or []) + ([self.current] if self.current is not None else []))
+        self.fetch_inc = None; self.ball_incident = None; self.bad_ball = None
+    def switch_half(self, why):
+        old = half_name(self.home); self.mirror_all(); self.switches.append(self.clock())
+        msg = f"moved to the {half_name(self.home)} half: {why}"
+        self.log("half_switch", n=len(self.switches), home=self.home, old=old, why=why); self.notice(msg)
+    def choose_half(self):
+        """--home auto: the half our robot stands in when no other robot is in it; else the other half when that one is
+        empty; else hold (one alert) until one of the two is true"""
+        alerted = False
+        while not self.out_of_time():
+            s = self.look(); p = self.our_pos(s)
+            if not self.no_info(s) and p is not None:
+                mine = self.home if (p[0] >= 0) == (self.home[0] + self.home[1] >= 0) else mirror_rect(self.home); other = mirror_rect(mine)
+                occ = lambda r: [n for n, x, y in s.get("others") or () if in_rect((x, y), r)]
+                pick = mine if not occ(mine) else (other if not occ(other) else None)
+                if pick is not None:
+                    if pick != self.home: self.mirror_all()
+                    self.log("half_chosen", home=self.home, half=half_name(self.home), robot=[round(v, 3) for v in p]); return True
+                if not alerted:
+                    alerted = True
+                    self.alert(f"both halves hold other robots ({', '.join(self.who(n) for n in occ(mine) + occ(other))}): the session waits")
+            self.sleep(1.0)
         return False
     def ensure_home_clear(self):
         s = self.look(); w = [] if self.no_info(s) else self.intrusion(s)
@@ -1318,10 +1482,15 @@ class Session:
         k = st["kind"]
         if is_motion(st):
             if self.motion_halted: self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: motion stopped"); return
-            if not self.motion_ok(st): pending.insert(0, st); return
-            if self.home is not None:
-                if not self.ensure_home_clear(): pending.insert(0, st); return
-                if not self.after_home(self.look()): pending.insert(0, st); return
+            self.current = st                          # a switch of halves while it waits mirrors it (self.current)
+            try:
+                if not self.motion_ok(st): pending.insert(0, self.current); return
+                if self.home is not None:
+                    if not self.after_home(self.look()): pending.insert(0, self.current); return
+                    if not self.ensure_home_clear(): pending.insert(0, self.current); return
+                    if self.current is not st: pending.insert(0, self.current); return
+            finally:
+                self.current = None
             if self.no_ball and not self.foreign_ball_clear(st, pending): return
         if self.out_of_time() and not st.get("final"): pending.insert(0, st); return
         r = self.run_step(st)
@@ -1355,9 +1524,9 @@ class Session:
             st["_interrupted"] = st.get("_interrupted", 0) + 1
             self.log("decision", n=st.get("n"), action="step interrupted: " + why.split(":")[0], why=why, times=st["_interrupted"])
             w = getattr(self, "last_intrusion", ([("another robot", 0.0, 0.0, "inside")], None))[0] if why.startswith("another robot") else []
-            s = self.look(); self.intrusion_hold(w, self.our_pos(s), during=True)
-            if st["_interrupted"] <= 5: pending.insert(0, st)
+            if st["_interrupted"] <= 5: pending.insert(0, st)            # queued first: a switch of halves mirrors it
             else: self.skipped.append(st.get("n")); self.log("decision", n=st.get("n"), action="skipped: interrupted 5 times")
+            s = self.look(); self.intrusion_hold(w, self.our_pos(s), during=True)
             self.after(st, dict(r, ok=True))
             return True
         self.log("foreign_ball", n=st.get("n"), action="step stopped: a ball near our robot inside the test area", why=why)
@@ -1431,12 +1600,13 @@ class Session:
                  home=self.home, no_ball=self.no_ball, park=self.park)
         for st in self.steps:
             if st.get("_refused"): self.skipped.append(st.get("n")); self.log("refused", n=st.get("n"), label=st.get("label", ""), why=st["_refused"])
-        pending = list(main)
+        pending = list(main); self.pending = pending
         why = self.preflight()
         if why:
             self.stop_why = f"refused to start: {why}"; self.log("refused_start", why=why); print(f"refused to start: {why}", flush=True)
             self.alert(f"session not started: {why}"); return self
         try:
+            if self.home_auto and self.home is not None: self.choose_half()
             self.loop(pending)
         except Exception as e:                              # a fault of the supervisor itself: end cleanly
             import traceback
@@ -1455,6 +1625,8 @@ class Session:
                 if not pending or not self.wait_for_ball(): break
                 continue
             pending.remove(st)
+            if st.get("_refused"):                      # a step mirrored into a half where it does not fit
+                self.skipped.append(st.get("n")); self.log("refused", n=st.get("n"), label=st.get("label", ""), why=st["_refused"]); continue
             self.execute(st, pending)
 
     def finish(self, final, pending):
@@ -1499,7 +1671,8 @@ class SimStrategy:
 
 
 class SimNotifier:
-    def __init__(self, echo=False): self.sent = []; self.echo = echo
+    def __init__(self, echo=False): self.sent = []; self.echo = echo; self.quiet = []
+    def notice(self, msg, title): self.quiet.append(msg); return "ok"
     def send(self, msg, title):
         self.sent.append(msg)
         if self.echo: print(f"*** NOTIFY: {title}: {msg}", flush=True)
@@ -1588,6 +1761,9 @@ HOME_DECISIONS = [
      "after info-alert s: 'no vision for N s: the session holds' (once)"),
     ("the robot the tools drive is not ours (more than 0.25 m from our colour + id in the raw vision)",
      "at start: the session does not start; later: the step is stopped, all motion stops, the session ends", "'the robot the tools are driving is not ours: ...'"),
+    ("our half held by another robot for switch-after s (gaps < 1 s), the other half known and empty all that time, the way over clear for clear s",
+     "switch halves: every step still to run mirrored (x -> -x, directions 180 - d, side swapped, plans written mirrored), the robot drives over (watched, corridor rule), the interrupted step is repeated there; not within switch-cooldown s of the last; at most max-switches",
+     "a quiet notice (SOLO_NOTICE_CMD; else the log): 'moved to the +x half: another robot (yellow 2) stayed in the -x half for 20 s'; at the limit one alert"),
     ("a fetch stopped by another robot", "our robot drives back only when its surroundings or its way back have been clear for clear s; a new fetch waits clear s", "blocked for fetch-wait s: 'our robot is outside our half ...'"),
     ("ball resting outside the home area, on the field, placeable (ball sessions)",
      "a fetch: one place_ball run to the parking spot with a box round robot, ball and spot, only while no other robot is within corridor m of robot->ball and ball->spot (checked 10 times a second during it; a robot in the corridor stops it, a goto back inside, a retry later; at most fetch-tries)",
@@ -1600,7 +1776,7 @@ HOME_DECISIONS = [
     ("no-ball session: a ball inside the running step's area within ball-guard m of our robot", "the step is stopped (zeros) and moves to the end of the list", "-"),
 ]
 
-def dry_run(sess, out=sys.stdout):
+def dry_run(sess, out=sys.stdout, tables=True):
     p = lambda *a: print(*a, file=out)
     p(f"session {sess.head.get('name', '')}: {len(sess.steps)} steps, budget {round(sess.t_end - sess.t_start)} s; log {sess.log_path}; events {sess.events_path}")
     p(f"notify command: {'set' if os.environ.get('SOLO_NOTIFY_CMD') else 'NOT SET (alerts only printed)'}")
@@ -1610,6 +1786,8 @@ def dry_run(sess, out=sys.stdout):
         p(f"home area {','.join(f'{v:g}' for v in sess.home)} (open edges: {', '.join(k for k, v in open_edges(sess.home).items() if v) or 'none'}); "
           f"ball {'IGNORED (no-ball session: no placement, fetch or ball alert)' if sess.no_ball else f'fetched to the parking spot {sess.park}'}; "
           f"corridor {sess.corridor} m, fetch-wait {sess.fetch_wait:.0f} s; intruder distance {sess.intrude_dist} m, clear {sess.clear_s:.0f} s, hold-limit {sess.hold_limit:.0f} s")
+        p(f"half {half_name(sess.home)}" + (" (--home auto: chosen at start)" if sess.home_auto else "") + "; switch of halves: " +
+          (f"after {sess.switch_after:.0f} s, cooldown {sess.switch_cooldown:.0f} s, at most {sess.max_switches}" if sess.switch_after else "off"))
     elif sess.no_ball: p("no-ball session (no placement, fetch or ball alert); no home area")
     refused = [st for st in sess.steps if st.get("_refused")]
     p(f"refused at load: {len(refused)}" + "".join(f"\n    step {st.get('n')} ({st.get('label', st['kind'])}): REFUSED: {st['_refused']}" for st in refused))
@@ -1635,6 +1813,7 @@ def dry_run(sess, out=sys.stdout):
         if st.get("_boxes") and sess.home is not None: p(f"        area: {'; '.join(','.join(f'{v:g}' for v in r) for r in st['_boxes'][:4])}{' ...' if len(st['_boxes']) > 4 else ''}")
         if st.get("_refused"): p(f"        REFUSED: {st['_refused']}")
         if st.get("_unchecked"): p(f"        {st['_unchecked']}")
+    if not tables: return
     p("\nsituation -> what the supervisor does -> what the person receives")
     for a, b, c in DECISIONS + (HOME_DECISIONS if sess.home is not None or sess.no_ball else []): p(f"  {a}\n      -> {b}\n      -> {c}")
 
@@ -1652,6 +1831,8 @@ def main():
               clear_s=float(opt("--clear", "5")), hold_limit=float(opt("--hold-limit", "120")), ball_hold=float(opt("--ball-hold", "30")))
     home = opt("--home", None); park = opt("--park", None)
     our_id = opt("--our-id", os.environ.get("SOLO_OUR_ID") or None); hk["fetch_limit"] = float(opt("--fetch-limit", "1.0"))
+    hk.update(info_alert=float(opt("--info-alert", "10")), switch_after=float(opt("--switch-after", "20")),
+              switch_cooldown=float(opt("--switch-cooldown", "60")), max_switches=int(opt("--max-switches", "4")))
     vg, _, vp = opt("--vision", f"{VISION_GROUP}:{VISION_PORT}").rpartition(":"); viface = opt("--vision-iface", os.environ.get("SOLO_IFACE", "0.0.0.0"))
     vmirror = "--vision-mirror" in args; args = [a for a in args if a != "--vision-mirror"]
     if park: hk["park"] = [float(v) for v in park.split(",")]
@@ -1665,7 +1846,9 @@ def main():
     team, path = args[0], args[1]
     head, steps, vs = load_session(path, team, extra)
     budget_s = 60.0 * (budget or float(head.get("budget_min", 10)))
+    if home == "auto": hk["home_auto"] = True; home = None                         # the half chosen at start
     hk["home"] = home_rect(home if home is not None else head.get("home", ""))   # --home "" = the whole field
+    if hk.get("home_auto") and hk["home"] is None: sys.exit("--home auto needs the session's \"home\" (the half it is written for)")
     kw.update(hk); kw["our_id"] = our_id
     if hk["home"] is not None and our_id is None:
         sys.exit("a session with a home area needs our robot's vision id: --our-id N (or SOLO_OUR_ID=N)")
@@ -1675,7 +1858,14 @@ def main():
     if dry:
         if hk["home"] is not None: print(f"vision listener (not opened in a dry run): {vg}:{vp} on {viface}{', y mirrored' if vmirror else ''}; our robot {team} {our_id}")
         else: print("WARNING: no home area: other robots are not watched")
-        dry_run(Session(team, steps, head, vs, procs=procs, strategy=Strategy(procs), log_path=log_path, events_path=events, budget_s=budget_s, **kw)); return
+        dry_run(Session(team, steps, head, vs, procs=procs, strategy=Strategy(procs), log_path=log_path, events_path=events, budget_s=budget_s, **kw))
+        if hk["home"] is not None:                     # the same session mirrored into the other half
+            pd = os.path.join(vs.get("OUT") or os.path.join(dd, "sessions"), "mirrored"); mk = dict(kw, home=mirror_rect(hk["home"]))
+            if hk.get("park"): mk["park"] = mirror_pose(hk["park"])
+            print(f"\n==== the same session in the {half_name(mk['home'])} half (a switch of halves; mirrored plans in {pd})")
+            dry_run(Session(team, [mirror_step(st, pd, vs) for st in steps], mirror_head(head), vs, procs=procs, strategy=Strategy(procs),
+                            log_path=log_path, events_path=events, budget_s=budget_s, **mk), tables=False)
+        return
     if sim is not None:                                # the whole session on a simulated clock, fakes for every step
         clk = SimClock(); fix = SIM_FIX.get(sim)
         world = ScriptedWorld(clk, robot=(0.0, 0.6, 0.0), ball=(0.3, -0.9), timeline=[(clk.t + fix[0], fix[1])] if fix else ())

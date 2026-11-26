@@ -19,8 +19,10 @@ Environment variables:
 | `ROBOT_CONFIG` | optional | robot_control configuration for `robot_stack.sh` (default `three_wheel`) |
 | `SOLO_DATA` | optional | folder for recordings, logs, the vision map and the field page's event log (default `<repo>/log/solo`, created if missing) |
 | `SOLO_DOMAIN` | optional | ROS domain on both sides, laptop (`env.sh`) and robot (`robot_stack.sh`) (default 77) |
-| `SOLO_IFACE` | optional | this computer's address on the robot's network: DDS uses only that address; the field page joins the game controller's multicast on it |
-| `SOLO_ROBOT_INDEX` | optional | our robot's vision id (default 0) |
+| `SOLO_IFACE` | optional | this computer's address on the robot's network: DDS uses only that address; the field page joins the game controller's multicast on it, `auto_session.py` the vision multicast |
+| `SOLO_ROBOT_INDEX` | optional | our robot's index among its colour in the vision connector's topics (default 0) |
+| `SOLO_OUR_ID` | required by `auto_session.py` with a home area (or `--our-id`) | our robot's vision id: the supervisor tells our robot from every other one by colour and this id in the raw vision |
+| `SOLO_NOTICE_CMD` | optional | an executable for quiet notices of `auto_session.py` (a switch of halves), called as `CMD "message" "title"`; unset: a log line |
 | `SOLO_OWN_COUNT`, `SOLO_OTHER_COUNT` | optional | robots per team the vision connector reports, ours and the other team's (defaults 1 and 3) |
 | `SOLO_VISION_MAP_MODULE` | optional | path of `vision_map.py` for the strategy node's recovery (`env.sh` sets it to this repository's copy) |
 | `SOLO_VISION_PB_DIR` | optional | folder with generated SSL vision protobuf modules for `vision_map.py`, when `ssl_vision_connector` is not importable |
