@@ -425,8 +425,8 @@ def test_parking_the_ball_waits_for_the_robot_and_for_other_programs():
         return orig(allow)
     s.busy_now = busy_now
     orig_run = run.run
-    def spy(argv, env, timeout, tee=None):
-        seen.append((clk.t - t0, " ".join(argv))); return orig_run(argv, env, timeout, tee)
+    def spy(argv, env, timeout, tee=None, watch=None):
+        seen.append((clk.t - t0, " ".join(argv))); return orig_run(argv, env, timeout, tee, watch)
     run.run = spy
     s.run()
     place = [t for t, c in seen if "place_ball.py" in c]
