@@ -103,7 +103,7 @@ def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps
     D = {}
     def frames(t):
         dt = t - D["t0"]; rs = []
-        if drop is None or not (drop[0] <= dt < drop[0] + drop[1]): rs.append(("blue", 3, *world.robot[:2]))
+        if drop is None or not (drop[0] <= dt < drop[0] + drop[1]): rs.append(("blue", 3, *world.robot[:3]))
         return {0: rs + (others(dt) if others else [])}
     s, run, note, world, clk = make_cams(steps or [dict(kind="goto", x=GOAL[0], y=GOAL[1], label="g"), SPIN(label="after")], frames,
                                          robot=(*START, 0.0), budget=budget, switch_after=0)
@@ -130,16 +130,22 @@ def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps
     s.run()
     return s, run, note, clk, starts, checks
 
-def test_a_dropout_or_a_stop_at_speed_on_a_clean_field_does_not_lose_our_robot():
-    cases = {"0.3 s at 1.5 m/s": (1.5, (1.0, 0.3)), "0.45 s at 1.0 m/s": (1.0, (1.0, 0.45)),
-             "1.0 s at 1.0 m/s": (1.0, (1.0, 1.0)), "1.0 s at 0.5 m/s": (0.5, (1.0, 1.0))}
-    for name, (v, drop) in cases.items():
+PROBES = lambda run: [c for c in run.cmds("characterize.py") if " spin +1.50 0.70 " in c or " spin -1.50 0.70 " in c]
+
+def test_a_dropout_or_a_stop_at_speed_on_a_clean_field_keeps_our_robot_or_proves_it_by_a_turn_and_the_session_goes_on():
+    cases = {"0.3 s at 1.5 m/s": (1.5, (1.0, 0.3), False), "0.45 s at 1.0 m/s": (1.0, (1.0, 0.45), False),
+             "1.0 s at 0.5 m/s": (0.5, (1.0, 1.0), False),            # reappears within 0.5 m: accepted
+             "1.0 s at 1.0 m/s": (1.0, (1.0, 1.0), True)}             # reappears 0.92 m away: lost, then the probe
+    for name, (v, drop, probed) in cases.items():
         s, run, note, clk, starts, checks = clean_session(v, drop)
         assert s.ours_lost is None and not s.not_ours and s.done == [1, 2], (name, s.done, run.stops)
-        assert not [m for m in alerts(note) if "which robot is ours" in m], name
+        lost = [m for m in alerts(note) if "which robot is ours" in m]
         assert all(d <= lim for d, lim in checks), name
+        if probed:
+            assert len(lost) == 1 and len(PROBES(run)) == 2 and note.quiet == ["our robot recognised by its turn at (-0.98, +0.43)"], name
+        else: assert not lost and not PROBES(run) and not note.quiet, name
         if drop[1] >= 1.0:                                  # longer than the raw view keeps a detection: stopped, then repeated
-            assert run.stops and run.stops[0][1].startswith("no information: our robot (blue 3) not seen") and len(starts) == 3, name
+            assert run.stops and run.stops[0][1].startswith("no information: our robot (blue 3) not seen") and len(run.cmds("goto.py")) == 2, name
         else: assert run.stops == [] and len(starts) == 2, name
 
 def test_our_robot_sliding_after_an_intruder_stops_a_fast_drive_is_not_lost_and_the_session_goes_on():
@@ -150,7 +156,7 @@ def test_our_robot_sliding_after_an_intruder_stops_a_fast_drive_is_not_lost_and_
         assert s.ours_lost is None and not s.not_ours and s.done == [1, 2] and len(starts) == 3, (react, decel, run.stops)
         assert not [m for m in alerts(note) if "which robot is ours" in m] and all(d <= lim for d, lim in checks)
 
-def test_a_3_s_dropout_during_a_strategy_step_does_not_lose_our_robot():
+def test_a_3_s_dropout_during_a_strategy_step_ends_with_our_robot_proved_by_its_turn():
     st = dict(kind="strategy", on=True, seconds=6, side="negative", label="play")
     s0 = {}
     def drive(s, clk, world, v=1.0):                     # the node drives our robot along +y while it runs
@@ -163,7 +169,7 @@ def test_a_3_s_dropout_during_a_strategy_step_does_not_lose_our_robot():
         s.sleep = sleep
     D = {}
     def frames(t):
-        dt = t - D["t0"]; return {0: [] if 1.0 <= dt < 4.0 else [("blue", 3, *world.robot[:2])]}
+        dt = t - D["t0"]; return {0: [] if 1.0 <= dt < 4.0 else [("blue", 3, *world.robot[:3])]}
     s, run, note, world, clk = make_cams([st, SPIN(label="after")], frames, robot=(-1.6, -1.2, 0.0), budget=200, switch_after=0)
     snap0 = world.snapshot; F = {}
     def snap():
@@ -175,7 +181,9 @@ def test_a_3_s_dropout_during_a_strategy_step_does_not_lose_our_robot():
     world.snapshot = snap; drive(s, clk, world); D["t0"] = clk.t
     s.run()
     assert s.ours_lost is None and not s.not_ours and 2 in s.done
-    assert not [m for m in alerts(note) if "which robot is ours" in m]
+    lost = [m for m in alerts(note) if "which robot is ours" in m]          # reappeared 0.6 m away: proved by its turn
+    assert len(lost) == 1 and "ours unseen for 3.2 s" in lost[0] and len(PROBES(run)) == 2
+    assert note.quiet and note.quiet[0].startswith("our robot recognised by its turn at (-1.60, +0.40)")
 
 def test_our_robot_standing_its_tag_dropping_out_and_a_robot_of_our_colour_and_id_seen_0_4_m_away_is_lost():
     D = {}

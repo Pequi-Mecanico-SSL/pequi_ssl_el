@@ -408,7 +408,8 @@ def test_a_hold_under_information_that_comes_and_goes_alerts_and_reminds():
     def frames(now):                                    # from 2 s our robot unseen 0.8 s out of every 2 s
         dt = now - t["0"]
         return {0: []} if dt > 2 and (dt % 2.0) < 0.8 else {0: [OURS]}
-    s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(3)], frames, budget=600, switch_after=0)
+    s, run, note, world, clk = make_cams([SPIN(label=f"s{k}") for k in range(3)], frames, budget=600, switch_after=0,
+                                         clear_own=5.0)   # the full clear time also when only our robot is unseen
     t["0"] = clk.t; rec = timed(s, clk); s.run()
     a = [(dt, m) for dt, k, m in rec if k == "alert" and not m.startswith(("session starting", "session ended"))]
     assert run.stops and a and a[0][0] <= run.stops[0][0] - t["0"] + 10 + 0.5
