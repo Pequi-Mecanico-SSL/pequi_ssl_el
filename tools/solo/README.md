@@ -63,14 +63,32 @@ of their series plans, `OUT` (default `$SOLO_DATA/sessions`, or `--var OUT=DIR`)
 Each session writes its step log to `$SOLO_DATA/auto/` and its markers to `$SOLO_DATA/events_<date>.jsonl`: one line
 per marker with its text and `"data": "use"` or `"skip"`, so that the recordings taken at the same time (vision,
 robot) can be cut into the stretches that are test data and the ones that are not.
-With a home area the supervisor keeps our robot's last unambiguous position with the time of its detection; a
-robot of our colour and id seen farther from it than 0.15 m + `--max-speed` (2.0 m/s) x the time our robot may have
-been moving since then (every interval a motion step or the strategy node ran, each extended by `--settle` s, 1.5,
-after its stop for the reaction delay and braking) is "which robot is ours was lost": the session holds until our
-robot is seen back at that position. A camera dropout or a stop at full speed stays inside that allowance; a robot
-standing still allows 0.15 m. Another robot counts from its second consecutive frame of one camera (or after
-0.1 s without a newer frame of that camera), so a single false detection stops nothing; the robot the tools drive
-is compared with ours only while ours was detected within the last 0.1 s.
+With a home area the supervisor keeps our robot's last unambiguous position (the anchor) with the time of its
+detection. A single robot of our colour and id seen after it is ours when ours was unseen for less than 0.5 s and
+it is within 0.15 m + `--max-speed` (2.0 m/s) x the time since the anchor's detection (0.15 m when no motion step or
+strategy node ran then, or stopped within `--settle` s, 1.5, before: the robot stood; the settle window says only
+that it may move, it adds no distance), or when ours was unseen for 0.5 s or more, it reappears within `--reappear`
+m (0.5) of the anchor and no second robot of our colour and id was seen meanwhile. Anything else is "which robot is
+ours was lost": the session holds, alerts at once, and clears when ours is seen back at the anchor for `--clear` s,
+or through the identity probe.
+
+The identity probe: while identity is lost and exactly one robot of our colour and id is in view, standing still,
+with no other robot in our half or within 1 m of it, for `--clear` s, the supervisor runs two turns on the spot in a
+random order of signs (`characterize.py <team> spin <+-rate> <time>`, `--probe-rate` 1.5 rad/s, `--probe-time` 0.7
+s, 0.5 s apart), each watched. If the candidate's heading follows both turns (0.4 to 1.6 times the commanded angle,
+in the commanded direction) and it moves less than 0.10 m, it is ours: identity is anchored on it and a quiet notice
+is sent. Otherwise one alert says that the robot did not follow a commanded turn, the session holds, and that
+place is not probed again for 60 s. At most `--probes` (6) per session; `--probes 0` switches it off. A pure turn on
+the spot moves nobody across the field: if the candidate is another team's robot, ours only turns where it stands.
+`characterize.py spin` sends only an angular rate, never drives to a start pose, and uses its pose only to stop.
+
+A hold whose only cause was our robot not seen (the vision fresh throughout, no other robot in or near our half)
+ends once our robot has been seen again for `--clear-own` s (1.5); every other hold needs `--clear` s. Another robot
+counts from its second sighting by one camera within 0.25 s (any two frames: a robot detected in every other frame
+counts) and stays counted until its sighting expires (0.5 s); a sighting within 0.2 m of a recent one of another
+colour or id counts at once (an id read differently from frame to frame), so only a single isolated detection is
+ignored. The robot the tools drive is compared with ours only while ours was detected within the last 0.1 s. If the
+alert sender's thread has ended, "session ended" is sent once directly.
 
 `hq.py`, `auto_session.py` and `place_ball.py` share `procs.py`: the list of programs that command the robot (the
 strategy node and every tool here that publishes velocity commands), the test for a running instance of one, and the
