@@ -1,0 +1,4 @@
+protobuf
+numpy
+# sslrules: the rules package, an external package (not part of this repository); it is mounted into the
+# container and added to PYTHONPATH by docker-compose.

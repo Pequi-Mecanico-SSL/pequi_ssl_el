@@ -1,0 +1,35 @@
+launch:
+
+- arg:
+    # 224.5.23.1:10003 = ssl-game-controller default publish address
+    name: "referee_port"
+    default: "10003"
+- arg:
+    name: "referee_ip"
+    default: "224.5.23.1"
+- arg:
+    # EL (rulebook numbers), EL_REFEREED (what stock GC + TIGERs enforce), DIVB
+    name: "ruleset"
+    default: "EL"
+- arg:
+    # address of the interface to join the multicast group on (0.0.0.0 = default route; a simulator on its own docker network: that network's host address)
+    name: "referee_iface"
+    default: "0.0.0.0"
+
+- node:
+    pkg: "referee_connector"
+    exec: "referee_connector"
+    name: "referee_connector"
+    param:
+    -
+        name: referee_ip
+        value: $(var referee_ip)
+    -
+        name: referee_port
+        value: $(var referee_port)
+    -
+        name: ruleset
+        value: $(var ruleset)
+    -
+        name: referee_iface
+        value: $(var referee_iface)
