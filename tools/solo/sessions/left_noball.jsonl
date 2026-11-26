@@ -1,7 +1,7 @@
 # A 10-minute session in the left half of a shared field (x < 0), without the ball: the ball on the field is not ours
 # and is never touched; a ball rolling into a test's area holds that test (quietly) or moves it to the end.
 # Home area x -2.2..-0.10, y -1.45..1.45 (set in the header; --home overrides). P: the plan folder (default plans/ next to this file); OUT: logs and results (default $SOLO_DATA/sessions).
-# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball.jsonl --budget 10
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball.jsonl --budget 10 --our-id N
 {"kind": "session", "name": "left_noball", "budget_min": 10, "ball": "ignore", "home": "-2.2,-0.10,-1.45,1.45", "vars": {"P": "${SESSION_DIR}/plans", "OUT": "${SOLO_DATA}/sessions"}, "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
 {"kind": "marker", "label": "start marker", "text": "left-half session without the ball: start (auto_session)", "data": "use"}
 {"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}

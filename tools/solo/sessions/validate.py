@@ -2,7 +2,8 @@
 """Check series.py plans and auto_session.py sessions without running anything (numpy only, no ROS).
     python3 tools/solo/sessions/validate.py [--map MAP.npz] [--home x0,x1,y0,y1] FILE.jsonl ...
 FILE is a plan (lines with "test") or a session (a first line with "kind": "session"; its "home" applies unless --home
-is given). --map defaults to $SOLO_DATA/vision_map/map.npz (the camera coverage map of vision_map.py).
+is given). --map defaults to $SOLO_DATA/vision_map/map.npz (the camera coverage map of vision_map.py); without a map
+the coverage checks are skipped ("coverage not checked (no map)") and the rest runs.
 Plans: JSON and argument forms (characterize.py / series.py), start / run / stop points inside the line's box, inside
 the home area and 0.25 m inside the field lines (coverage sweeps excepted), coverage along every path (cells with a
 detection rate under 0.8 are "weak", cells without evidence "unseen").
@@ -33,6 +34,7 @@ def line_pts(a, b, n=None):
 
 def coverage(vm, pts):
     """-> text: weak and unseen cells along the points"""
+    if vm is None: return ""
     weak, unseen = set(), set()
     for x, y in pts:
         e, r = vm.evidence(x, y), vm.rate(x, y)
@@ -142,7 +144,7 @@ def check_session(path, vm, home_opt):
                     sp = (last_spot[0] + ex, last_spot[1] + ey)
                     pts += line_pts((sp[0] - run * u[0], sp[1] - run * u[1]), (sp[0] + (past + 0.6) * u[0], sp[1] + (past + 0.6) * u[1]), 20)
             out = [p for p in pts if not any(A.in_rect(p, r) for r in box)]
-            if out: flags.append(bad(f"robot path leaves the box for a ball placed 0.15 m off ({len(out)} points, e.g. ({out[0][0]:+.2f}, {out[0][1]:+.2f}))"))
+            if out: flags.append(bad(f"robot path leaves its test area for a ball placed 0.15 m off ({len(out)} points, e.g. ({out[0][0]:+.2f}, {out[0][1]:+.2f}))"))
             if home is not None and any(not A.in_rect(p, home) for p in pts): flags.append(bad("robot path leaves the home area"))
             rests = ram_rests(last_spot, v, d)
             kinds = {}
@@ -177,13 +179,13 @@ def main():
     if "--home" in args: i = args.index("--home"); home = args[i + 1]; del args[i:i + 2]
     if not args: sys.exit(__doc__)
     vm = V.load(mp)
-    if not vm.ok: sys.exit(f"no coverage map at {mp} (--map or $SOLO_DATA/vision_map/map.npz)")
+    if not vm.ok: vm = None; print("coverage not checked (no map)")
     for f in args:
         first = next((l for l in open(f) if l.strip() and not l.lstrip().startswith("#")), "{}")
         print(f.split("tools/solo/")[-1])
         if json.loads(first).get("kind") == "session": check_session(f, vm, home)
         else: check_plan(f, vm, A.home_rect(home) if home else None)
-    print("problems:", problems)
+    print("problems:", problems); sys.exit(1 if problems else 0)
 
 if __name__ == "__main__":
     main()

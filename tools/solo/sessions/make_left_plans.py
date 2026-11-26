@@ -3,7 +3,7 @@
 home area x -2.2..-0.10, y -1.45..1.45 (field frame, the left half of the field), 0.25 m inside the lines except the
 coverage pass. Lanes and spots were picked on the camera coverage map (validate.py checks them against it):
   lane Y1  x = -1.35 along y, y -1.15..+1.15: ramped runs at the 1.5 m/s cap (0.66 m to reach 1.5 at 1.7 m/s2, about
-           0.9 m held, about 0.6 m to stop inside the box); forward and sideways are the same lane with another heading
+           0.9 m held, about 0.6 m to stop inside its test area); forward and sideways are the same lane with another heading
   lane Y2  x = -0.85 along y: the command jumps (no ramp)
   spot S1  (-0.95, +0.10): spins and the gyro-scale turns, in a 0.8 m square
     python3 tools/solo/sessions/make_left_plans.py"""
