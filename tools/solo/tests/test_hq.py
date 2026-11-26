@@ -494,3 +494,23 @@ def test_a_reader_polling_state_does_not_keep_a_target_alive(hq):
         if n[0] % 12 == 0: assert state(hq)["target"] is not None or hq.S["target"] is None
     hq.W.spin = spin_and_read; run(hq, 2.5)
     assert hq.S["target"] is None and hq.S["note"] == "page stopped asking: target dropped" and n[0] > 100
+
+
+def test_coverage_underlay(hq, monkeypatch):
+    nan = float("nan")
+    assert hq.coverage_rows([[0.954, nan], [nan, 0.301]]) == [[0.95, None], [None, 0.3]]
+
+    class FakeMap:                                        # what vision_map.load() returns, reduced to what the page uses
+        ok = True; x0, y0, cell, nx, ny = -2.85, -2.1, 0.1, 2, 2
+        def reload(self): return True
+        def rate_grid(self, min_evidence=1.0): return [[1.0, nan], [0.5, 0.25]]
+    hq.MAPV[:] = [FakeMap(), -1e9, None]
+    code, body = get(hq, "/map")
+    d = json.loads(body)
+    assert code == 200 and d["ok"] and d["cell"] == 0.1 and d["rate"] == [[1.0, None], [0.5, 0.25]]
+    FakeMap.ok = False                                    # no map file: the page gets the reason, nothing else breaks
+    hq.MAPV[1] = -1e9
+    code, body = get(hq, "/map")
+    assert code == 200 and json.loads(body)["ok"] is False
+    code, _ = get(hq, "/map", headers={"Host": "other.example"})
+    assert code == 403

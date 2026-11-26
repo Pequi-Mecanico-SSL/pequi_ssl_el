@@ -26,6 +26,9 @@ command, the score, fouls, cards, timeouts, goalkeepers and the last game events
 EVENTS opens a scrolling log (newest first): referee commands, stage changes, goals, fouls and cards, game events,
 the strategy's mode changes, our robot lost from and back in vision, and what was done on this page. The log is also
 appended to $SOLO_DATA/hq_events_<date>.jsonl (default <repo>/log/solo).
+CAMERA MAP switches an underlay on and off: the coverage map of tools/solo/vision_map.py, each 0.1 m cell coloured by
+how often the overhead camera detected a robot standing there (green at 90 % and more, through yellow, to red at 30 %
+and less; grey: no evidence yet). It is read from the map file every 5 s, so a map being updated live shows as it grows.
 The STRATEGY button stops the strategy node (the robot can then be placed by clicking) and starts it again with the
 arguments it had; the policy server keeps running in between, so the restart takes a second or two. It starts the
 node only from a saved line of exactly the node's form (procs.check_node_cmd: an absolute python3, an absolute
@@ -420,16 +423,22 @@ canvas{display:block;background:#0b3d1c;cursor:crosshair}#note{color:#fc6}
 #evh{position:sticky;top:0;background:#222;border-bottom:1px solid #3a3a3a;padding:9px 12px;font:bold 14px sans-serif;display:flex;justify-content:space-between;cursor:pointer}
 .ev{display:grid;grid-template-columns:64px 92px 1fr;gap:8px;padding:3px 12px;border-bottom:1px solid #222}.ev .t{color:#888}.ev .x{color:#ddd;overflow-wrap:anywhere}
 .ev.goal{background:#14301a}.ev.card{background:#33240f}.ev.ball{background:#2a1c0c}#pl{display:none;padding:0 10px 4px;font-size:15px;color:#fb6}</style>
-<div id="evp"><div id="evh"><span id="evt">Events</span><span>hide</span></div><div id="evl"></div></div><div id="main" class="wide"><div id="bar"><button id="stop">STOP</button><button id="evb" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">events</button><button id="lock" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="strat" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="pmode" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;color:#fff"></button><select id="ptol" style="font-size:15px"><option value="rough">rough 0.15 m</option><option value="precise">precise 0.05 m</option></select><label>speed <input id="sp" type="range" min="0.1" max="VMAXV" step="0.05"> <span id="spv"></span> m/s</label>
+<div id="evp"><div id="evh"><span id="evt">Events</span><span>hide</span></div><div id="evl"></div></div><div id="main" class="wide"><div id="bar"><button id="stop">STOP</button><button id="cov" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">camera map: off</button><button id="evb" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">events</button><button id="lock" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="strat" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="pmode" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;color:#fff"></button><select id="ptol" style="font-size:15px"><option value="rough">rough 0.15 m</option><option value="precise">precise 0.05 m</option></select><label>speed <input id="sp" type="range" min="0.1" max="VMAXV" step="0.05"> <span id="spv"></span> m/s</label>
 <span id="st"></span><span id="note"></span></div><div id="pl"></div><div id="gc" style="padding:0 10px 4px;font-size:17px;font-weight:bold"></div><div id="gc2" style="padding:0 10px 4px;font-size:14px;color:#bbb"></div><div id="ref" style="padding:0 10px 6px;font-size:15px"></div><canvas id="c"></canvas></div>
 <script>
-let evopen=true,bmode=false;const plEl=document.getElementById('pl'),pm=document.getElementById('pmode'),ptol=document.getElementById('ptol');const LX=2.25,LY=1.5,M=0.6,c=document.getElementById('c'),g=c.getContext('2d');let st=null,drag=null,k=1;
+let evopen=true,bmode=false,cov=null,covOn=false;
+async function loadCov(){try{cov=await(await fetch('/map')).json()}catch(e){cov=null}}
+function drawCov(){if(!covOn)return;g.fillStyle='#2a2a2a';g.fillRect(0,0,c.width,c.height);if(!cov||!cov.ok)return;const w=cov.cell*k+0.6;
+ for(let i=0;i<cov.nx;i++)for(let j=0;j<cov.ny;j++){const v=cov.rate[i][j];if(v==null)continue;const h=120*Math.max(0,Math.min(1,(v-0.3)/0.6));
+  g.fillStyle='hsl('+h+',80%,'+(28+12*Math.min(1,v))+'%)';g.fillRect(X(cov.x0+i*cov.cell),Y(cov.y0+(j+1)*cov.cell),w,w)}}
+setInterval(()=>{if(covOn)loadCov()},5000);
+const plEl=document.getElementById('pl'),pm=document.getElementById('pmode'),ptol=document.getElementById('ptol');const LX=2.25,LY=1.5,M=0.6,c=document.getElementById('c'),g=c.getContext('2d');let st=null,drag=null,k=1;
 function fit(){c.width=innerWidth-(evopen?480:0);c.height=innerHeight-140-(plEl.offsetHeight||0);k=Math.min(c.width/(2*(LX+M)),c.height/(2*(LY+M)))}
 const X=x=>c.width/2+x*k,Y=y=>c.height/2-y*k,FX=p=>(p-c.width/2)/k,FY=p=>(c.height/2-p)/k;
 function post(u,b){fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})})}
 function robot(x,y,th,col,lab){g.fillStyle=col;g.beginPath();g.arc(X(x),Y(y),0.09*k,0,7);g.fill();g.strokeStyle='#fff';g.lineWidth=2;g.beginPath();
  g.moveTo(X(x),Y(y));g.lineTo(X(x+0.16*Math.cos(th)),Y(y+0.16*Math.sin(th)));g.stroke();g.fillStyle='#fff';g.fillText(lab,X(x)+8,Y(y)-10)}
-function draw(){fit();g.clearRect(0,0,c.width,c.height);g.strokeStyle='#fff';g.lineWidth=2;g.strokeRect(X(-LX),Y(LY),2*LX*k,2*LY*k);
+function draw(){fit();g.clearRect(0,0,c.width,c.height);drawCov();g.strokeStyle='#fff';g.lineWidth=2;g.strokeRect(X(-LX),Y(LY),2*LX*k,2*LY*k);
  g.beginPath();g.moveTo(X(0),Y(LY));g.lineTo(X(0),Y(-LY));g.stroke();g.beginPath();g.arc(X(0),Y(0),0.5*k,0,7);g.stroke();
  for(const s of[-1,1]){g.strokeRect(X(s>0?LX-0.5:-LX),Y(0.675),0.5*k,1.35*k);g.strokeStyle='#c6f';g.strokeRect(X(s>0?LX:-LX-0.18),Y(0.4),0.18*k,0.8*k);g.strokeStyle='#fff'}
  g.fillStyle='#9c9';g.fillText('-x',X(-LX)+4,Y(-LY)-6);g.fillText('+x',X(LX)-20,Y(-LY)-6);g.fillText('+y',X(-LX)+4,Y(LY)+14);
@@ -454,6 +463,7 @@ function draw(){fit();g.clearRect(0,0,c.width,c.height);g.strokeStyle='#fff';g.l
 c.onmousedown=e=>{drag={x0:e.offsetX,y0:e.offsetY,x1:e.offsetX,y1:e.offsetY}};c.onmousemove=e=>{if(drag){drag.x1=e.offsetX;drag.y1=e.offsetY}};
 c.onmouseup=e=>{if(!drag)return;if(st&&st.lock){drag=null;return}const dx=drag.x1-drag.x0,dy=drag.y1-drag.y0,b={x:FX(drag.x0),y:FY(drag.y0)};if(bmode){post('/place',{x:b.x,y:b.y,precise:ptol.value=='precise'});drag=null;return}if(Math.hypot(dx,dy)>15)b.th=Math.atan2(-dy,dx);post('/goto',b);drag=null};
 document.getElementById('stop').onclick=()=>post('/stop');
+const cb=document.getElementById('cov');cb.onclick=()=>{covOn=!covOn;cb.textContent='camera map: '+(covOn?'on':'off');cb.style.background=covOn?'#274':'#345';if(covOn)loadCov().then(()=>{if(cov&&!cov.ok)cb.textContent='camera map: none ('+cov.why+')'})};
 const evp=document.getElementById('evp'),evb=document.getElementById('evb'),evl=document.getElementById('evl'),mainEl=document.getElementById('main');let evn=0;
 const COL={goal:'#6f6',card:'#fa4','game event':'#fc6',referee:'#9cf',strategy:'#ccc',vision:'#f88',page:'#aaa',ball:'#f80'};
 function evset(o){evopen=o;evp.style.display=o?'block':'none';mainEl.className=o?'wide':'';evb.style.display=o?'none':''}
@@ -485,6 +495,28 @@ async function poll(){try{st=await(await fetch('/state?page=1')).json();if(docum
  draw()}
 setInterval(poll,100);</script>""".replace("VMAXV", str(VMAX))
 
+MAPV = [None, -1e9, None]                             # the coverage map object, when it was last read, the payload
+def coverage_rows(r):
+    """the rate grid as nx lists of ny values: two decimals, None where there is no evidence"""
+    return [[None if v != v else round(float(v), 2) for v in col] for col in r]
+def coverage():
+    """the camera coverage map for the page (re-read from its file at most every 5 s); ok False with the reason without one"""
+    t = now()
+    if MAPV[2] is not None and t - MAPV[1] < 5.0: return MAPV[2]
+    MAPV[1] = t
+    try:
+        if MAPV[0] is None:
+            import vision_map
+            MAPV[0] = vision_map.load()
+        else:
+            MAPV[0].reload()
+        m = MAPV[0]
+        if not m.ok: raise OSError("no coverage map file yet")
+        MAPV[2] = dict(ok=True, x0=m.x0, y0=m.y0, cell=m.cell, nx=m.nx, ny=m.ny, rate=coverage_rows(m.rate_grid(min_evidence=0.5)))
+    except Exception as e:
+        MAPV[2] = dict(ok=False, why=str(e)[:120])
+    return MAPV[2]
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def out(self, body, ctype="application/json", code=200):
@@ -501,6 +533,8 @@ class H(BaseHTTPRequestHandler):
             with ELOCK: ev = EVENTS[since:][-500:]
             return self.out(json.dumps(ev))
         path, _, query = self.path.partition("?")
+        if path == "/map":
+            return self.out(json.dumps(coverage()))
         if path == "/state":
             with LOCK:
                 if "page=1" in query.split("&"): S["poll"] = now()      # the dead man's switch: the page's own polls only
