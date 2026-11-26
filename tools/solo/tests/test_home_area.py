@@ -182,3 +182,11 @@ def test_no_ball_ball_rolling_at_the_robot_stops_the_step():
     s, run, note, *_ = make(steps, head={"ball": "ignore"}, ball=(0.5, 1.0), timeline=[(2.0, dict(ball=(-0.8, 0.1))), (3.0, dict(ball=(0.4, 0.9)))])
     s.run()
     assert run.stops and "a ball in the test area" in run.stops[0][1] and len(run.cmds("characterize.py")) == 2 and alerts(note) == []
+
+
+def test_strategy_step_with_an_unknown_node_parameter_is_refused():
+    steps = [dict(kind="strategy", on=True, seconds=5, side="negative", params={"evil;rm": 1}),
+             dict(kind="strategy", on=True, seconds=5, side="left"),
+             dict(kind="strategy", on=True, seconds=5, side="positive", params={"force_state": "running"})]
+    s, *_ = make(steps)
+    assert [bool(st.get("_refused")) for st in steps] == [True, True, False]

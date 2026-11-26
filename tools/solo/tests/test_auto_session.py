@@ -450,12 +450,14 @@ def arg_forms_ok(test, args):
     if test == "spin": return len(args) in (1, 2) and all(num(v) for v in args)
     if test == "ram": return len(args) in (1, 4) and all(num(v) for v in args)
     if test == "goto": return len(args) == 3 and all(num(v) for v in args)
+    if test == "sweep": return len(args) in (5, 6) and all(num(v) for v in args) and int(args[4]) >= 1
     return False
 
 
 def test_characterize_docstring_has_these_forms():
     doc = open(os.path.join(SOLO, "characterize.py")).read().split('"""')[1]
-    for form in ("step fwd|side <speed m/s> [x0 y0 dir_deg length]", "spin <rate rad/s> [seconds]", "ram <speed m/s> [dir_deg runup past]", "goto x y th_deg"):
+    for form in ("step fwd|side <speed m/s> [x0 y0 dir_deg length]", "spin <rate rad/s> [seconds]", "ram <speed m/s> [dir_deg runup past]", "goto x y th_deg",
+                 "sweep x0 x1 y0 y1 rows [speed]"):
         assert form in doc, form
 
 
@@ -463,7 +465,7 @@ def test_characterize_docstring_has_these_forms():
 def test_every_plan_a_shipped_session_names_exists_and_fits(name):
     head, steps, vs = A.load_session(os.path.join(SOLO, "sessions", name), "blue")       # the defaults, no --var
     plans = [A.expand(st["plan"], vs) for st in steps if st["kind"] == "series"]
-    assert plans
+    assert plans or any(st["kind"] == "test" for st in steps)        # a ball session may run tests without a plan
     for st in steps:
         if st["kind"] == "test": assert arg_forms_ok(st["test"], st.get("args", [])), (name, st)
     for p in plans:

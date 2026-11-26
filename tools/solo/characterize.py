@@ -9,6 +9,8 @@ tests:  step fwd|side <speed m/s> [x0 y0 dir_deg length]
                                       from `runup` m behind the ball (0.75), straight through it along dir_deg, command
                                       off `past` m beyond the ball's spot (0.25)
         goto x y th_deg
+        sweep x0 x1 y0 y1 rows [speed]
+                                      rows along x from y0 to y1 (a coverage pass; 0.5 m/s)
 Every test logs t, pose, ball and command to a CSV in --out (default $SOLO_DATA/logs; SOLO_DATA
 defaults to log/solo in this repository; created if missing) and prints a summary.
 A small test area: SOLO_BOX="x0,x1,y0,y1" (m) is the rectangle the robot's centre must stay in. Leaving it aborts the

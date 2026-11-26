@@ -15,7 +15,7 @@ Y1, Y2 = -1.35, -0.85
 BOX_Y1 = f"{Y1 - 0.4:.2f},{Y1 + 0.4:.2f},-1.25,1.25"
 BOX_Y2 = f"{Y2 - 0.4:.2f},{Y2 + 0.4:.2f},-1.25,1.25"
 S1 = (-0.95, 0.10); BOX_S1 = f"{S1[0] - 0.4:.2f},{S1[0] + 0.4:.2f},{S1[1] - 0.4:.2f},{S1[1] + 0.4:.2f}"
-SURF = "venue_carpet"
+SURF = "carpet"
 
 
 def step(label, axis, v, x, y0, up, L, box):
@@ -27,8 +27,8 @@ def plans():
     P = {}
     up, dn = True, False
     P["left_A_ramped"] = [
-        step("sentinel fwd 1.0 up (Y1)", "fwd", 1.0, Y1, -1.15, up, 1.2, BOX_Y1),
-        step("sentinel fwd 1.0 down (Y1)", "fwd", 1.0, Y1, -1.15, dn, 1.2, BOX_Y1),
+        step("reference fwd 1.0 up (Y1)", "fwd", 1.0, Y1, -1.15, up, 1.2, BOX_Y1),
+        step("reference fwd 1.0 down (Y1)", "fwd", 1.0, Y1, -1.15, dn, 1.2, BOX_Y1),
         step("ramp fwd 1.5 up (Y1)", "fwd", 1.5, Y1, -1.15, up, 1.6, BOX_Y1),
         step("ramp fwd 1.5 down (Y1)", "fwd", 1.5, Y1, -1.15, dn, 1.6, BOX_Y1),
         step("ramp side 1.5 up (Y1)", "side", 1.5, Y1, -1.15, up, 1.6, BOX_Y1),
@@ -58,7 +58,7 @@ def plans():
     pts = [(-0.6, -0.9, 45), (-1.6, 0.2, 135), (-0.7, 0.9, -90), (-1.7, -1.0, 0), (-1.0, 0.0, 180), (-0.5, -0.3, 90),
            (-1.5, 0.95, -45), (-1.2, -0.6, 30), (-0.45, 0.5, -135), (-1.8, 0.6, 90), (-0.9, -1.1, 180), (-1.3, 0.45, -90)]
     P["left_F_goto_chain"] = [dict(label=f"goto {k}", test="goto", args=list(p), box="-1.95,-0.35,-1.2,1.2") for k, p in enumerate(pts)]
-    P["left_G_sentinel"] = P["left_A_ramped"][:2]
+    P["left_G_reference"] = P["left_A_ramped"][:2]
     return P
 
 

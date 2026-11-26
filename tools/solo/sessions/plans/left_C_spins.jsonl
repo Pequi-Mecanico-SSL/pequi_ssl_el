@@ -1,7 +1,7 @@
-{"label": "spin 6", "test": "spin", "at": [-0.95, 0.1, 0], "args": [6.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "spin -6", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-6.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "spin 10", "test": "spin", "at": [-0.95, 0.1, 0], "args": [10.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "spin -10", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-10.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "spin 14", "test": "spin", "at": [-0.95, 0.1, 0], "args": [14.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "gyro scale +6 for 6 s", "test": "spin", "at": [-0.95, 0.1, 0], "args": [6.0, 6.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
-{"label": "gyro scale -6 for 6 s", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-6.0, 6.0], "surface": "venue_carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "spin 6", "test": "spin", "at": [-0.95, 0.1, 0], "args": [6.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "spin -6", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-6.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "spin 10", "test": "spin", "at": [-0.95, 0.1, 0], "args": [10.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "spin -10", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-10.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "spin 14", "test": "spin", "at": [-0.95, 0.1, 0], "args": [14.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "gyro scale +6 for 6 s", "test": "spin", "at": [-0.95, 0.1, 0], "args": [6.0, 6.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}
+{"label": "gyro scale -6 for 6 s", "test": "spin", "at": [-0.95, 0.1, 0], "args": [-6.0, 6.0], "surface": "carpet", "box": "-1.35,-0.55,-0.30,0.50"}

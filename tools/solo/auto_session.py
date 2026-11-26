@@ -73,6 +73,39 @@ DECISIONS (after every step the world is read from the field page's /state: robo
       rescue); after --busy-wait s an alert, and the session waits
   budget used / Ctrl-C -> the current step ends, strategy off, final steps, end marker, exit
 
+HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/left_*.jsonl)
+  --home "x0,x1,y0,y1" (or "home" in the session header; default: the whole field, no home checks) is where our robot
+  works; its edges inside the field (more than 0.3 m from the lines) are "open": the side other teams use. Options:
+  --corridor M (0.7), --fetch-wait S (60), --park X,Y (or "park" in the header), --intrude-dist M (1.0), --clear S (5),
+  --hold-limit S (120), --ball-hold S (30); --no-ball (or "ball": "ignore") for a session that never touches a ball.
+  Start, left half: the same as above, e.g.
+      python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball.jsonl --budget 10
+      python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10   (the ball is ours)
+  Tell the other teams: our robot stays in its half; in a session with the ball it may cross briefly to fetch our ball
+  when it rolled over, only while no robot is within 0.7 m of its way, and it backs off when one comes near; any robot
+  that enters our half (or comes within 1 m of ours) stops our robot until our half has been clear for 5 s.
+  At load: a step whose area (SOLO_BOX, each plan line's box, a goto's point, the placer's area) leaves the home area,
+  its edges along the walls moved out to the placer's limit, is refused; so is a strategy step without "side" or with a
+  node parameter the node does not declare. Dry run lists them.
+  While a motion step runs, /state is read 10 times a second: another robot inside the home area or within
+  --intrude-dist of ours stops the step at once (the stop of the time limit: SIGINT to its group; characterize.py,
+  place_ball.py and the strategy node send zeros), holds all motion, and the step is repeated from its start once the
+  home area has been clear for --clear s. A robot seen again within that time restarts the count.
+  Strategy steps: {"kind": "strategy", "on": true, "seconds": 10, "side": "negative", "params": {"force_state":
+  "running", "foe_all": false}, "end_ball_out": "x0,x1,y0,y1", "edge_guard": 1.0}: the saved node line with those -p
+  parameters replaced or added (checked by procs.check_node_cmd); nothing is restored afterwards. The node is switched
+  off when the robot comes within edge_guard m (0.9) of an open edge, or 0.5 s after the ball leaves end_ball_out.
+  What the notification says in the new cases, and what the person does:
+    "another robot (yellow 2) entered our half at (x, y); our robot stopped at (x, y)"      -> nothing; it resumes
+    "another robot (yellow 2) still in our half at (x, y) after 120 s: the session keeps holding (reminder 2/3)"
+    "ball at (x, y) in the other half, other robots near it (yellow 1 at (x, y)): fetch it when you can"
+                                                                                -> bring our ball back into our half
+    "our robot is outside our half at (x, y) and other robots block its way back: the session waits"
+  Nothing is sent for a foreign ball in a no-ball session: a ball within 0.15 m of the next step's area holds it up to
+  --ball-hold s, then the step moves to the end of the list; a ball inside the running step's area within 0.6 m of our
+  robot stops the step (zeros), which moves to the end. series.py itself only delays a test's start while a ball is
+  in its box ("REMOVE THE BALL"); characterize.py does not look at the ball during a step test.
+
 Tests (no robot, no ROS): uv run --with pytest pytest -q tools/solo/tests/test_auto_session.py
 """
 import json, math, os, re, signal, subprocess, sys, threading, time, urllib.request
@@ -585,6 +618,11 @@ class Session:
             why = None
             if self.no_ball and (st["kind"] == "place" or st.get("needs_ball") or st.get("park")):
                 why = "a ball step in a session without the ball"
+            if st["kind"] == "strategy" and not why:
+                names = set(st.get("params") or {}) | ({"side"} if st.get("side") else set())
+                unknown = sorted(n for n in names if n not in solo_procs.NODE_PARAMS)
+                if unknown: why = f"node parameters the node does not declare: {', '.join(unknown)}"
+                elif st.get("side") not in (None, "negative", "positive", "auto"): why = f"side {st.get('side')!r}: negative, positive or auto"
             if st["kind"] in MOTION and not why:
                 bx, err = self.step_boxes(st); st["_boxes"] = bx
                 if self.home is not None:
@@ -684,6 +722,7 @@ class Session:
             if q.get("robot") is None or q.get("ball") is None: return None
             bb = blockers(q.get("others"), [(q["robot"][:2], q["ball"][:2]), (q["ball"][:2], park)], self.corridor)
             return ("a robot in the corridor: " + ", ".join(f"{n} at ({x:+.2f}, {y:+.2f})" for n, x, y, _ in bb)) if bb else None
+        if not self.motion_ok(st): inc["tries"] -= 1; return False
         res = self.run_step(st, watch=self.fetch_watch(corridor))
         q = self.wait_ball_rest(self.look())
         if res.get("stopped"):
@@ -706,7 +745,9 @@ class Session:
         """after a stopped fetch: back into the home area by a goto (goto.py goes round the other team's robots)"""
         if not self.robot_seen(s) or in_rect(s["robot"], robot_area(self.home), 0.05): return True
         tgt = into(self.home, s["robot"]); self.log("retreat", robot=[round(v, 3) for v in s["robot"][:2]], to=list(tgt))
-        r = self.run_step(dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30))
+        st = dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30)
+        if not self.motion_ok(st): return False
+        r = self.run_step(st)
         return r.get("ok")
     def after_home(self, s, fetched=False):
         """the robot outside the home area between steps: drive it back inside first (corridor checked)"""
@@ -718,7 +759,9 @@ class Session:
                                  lambda q: not blockers(q.get("others"), [(r0, tgt)], self.corridor))
             self.sleep(1.0); s = self.look()
         self.log("return_home", robot=[round(v, 3) for v in r0], to=list(tgt), after_fetch=fetched)
-        r = self.run_step(dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30))
+        st = dict(kind="goto", x=tgt[0], y=tgt[1], v=0.4, label="back into the home area", n=0, timeout=30)
+        if not self.motion_ok(st): return False
+        r = self.run_step(st)
         return r.get("ok")
 
     # ---- the ball
@@ -749,6 +792,7 @@ class Session:
             self.log("ball_rescue", target=tgt, placer_can=can)
             if can and not self.busy_now() and self.robot_seen(s) and not self.motion_halted:
                 st = dict(kind="place", x=tgt[0], y=tgt[1], label="ball rescue", n=0, env={"SOLO_BOX": path_box([s["robot"][:2], s["ball"], tgt])})
+                if not self.motion_ok(st): return False
                 r = self.run_step(st, watch=self.watch_for(st)); self.after(st, r)
                 s = self.wait_ball_rest(self.look())
                 if self.ball_ready(s): self.log("ball_back", where=s["ball_where"]); self.ball_incident = None; return True
@@ -1266,7 +1310,7 @@ def dry_run(sess, out=sys.stdout):
             what = f"strategy on {st.get('seconds')} s, then off" if st.get("on", True) else "strategy off"
             prm = dict(st.get("params") or {}); prm.update({"side": st["side"]} if st.get("side") else {})
             if prm and st.get("on", True):
-                what += " with " + " ".join(f"-p {a}:={b}" for a, b in prm.items())
+                what += " with " + " ".join(f"-p {a}:={str(b).lower() if isinstance(b, bool) else b}" for a, b in prm.items())
                 try: what += "\n        node line: " + " ".join(with_params(json.load(open(sess.strat.cmdf)), prm))
                 except Exception: what += "\n        node line: the saved line (solo.cmd) with these parameters replaced or added"
             if st.get("end_ball_out"): what += f"; ends 0.5 s after the ball leaves {st['end_ball_out']}"

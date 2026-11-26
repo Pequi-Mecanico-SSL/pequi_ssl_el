@@ -1,6 +1,6 @@
-{"label": "jump fwd 1.0 up (Y2)", "test": "step", "args": ["fwd", 1.0, -0.85, -1.15, 90, 1.2], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
-{"label": "jump fwd 1.0 down (Y2)", "test": "step", "args": ["fwd", 1.0, -0.85, 1.15, -90, 1.2], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
-{"label": "jump fwd 1.5 up (Y2)", "test": "step", "args": ["fwd", 1.5, -0.85, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
-{"label": "jump fwd 1.5 down (Y2)", "test": "step", "args": ["fwd", 1.5, -0.85, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
-{"label": "jump side 1.5 up (Y2)", "test": "step", "args": ["side", 1.5, -0.85, -1.15, 90, 1.6], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
-{"label": "jump side 1.5 down (Y2)", "test": "step", "args": ["side", 1.5, -0.85, 1.15, -90, 1.6], "surface": "venue_carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump fwd 1.0 up (Y2)", "test": "step", "args": ["fwd", 1.0, -0.85, -1.15, 90, 1.2], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump fwd 1.0 down (Y2)", "test": "step", "args": ["fwd", 1.0, -0.85, 1.15, -90, 1.2], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump fwd 1.5 up (Y2)", "test": "step", "args": ["fwd", 1.5, -0.85, -1.15, 90, 1.6], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump fwd 1.5 down (Y2)", "test": "step", "args": ["fwd", 1.5, -0.85, 1.15, -90, 1.6], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump side 1.5 up (Y2)", "test": "step", "args": ["side", 1.5, -0.85, -1.15, 90, 1.6], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
+{"label": "jump side 1.5 down (Y2)", "test": "step", "args": ["side", 1.5, -0.85, 1.15, -90, 1.6], "surface": "carpet", "box": "-1.25,-0.45,-1.25,1.25", "settle": 1.0}
