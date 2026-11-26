@@ -33,7 +33,7 @@ Environment variables:
 | `SOLO_CMD_TOPIC`, `SOLO_CMD_RELIABLE` | optional | velocity topic of the test tools (default `/cmd_vel`); set `SOLO_CMD_RELIABLE` for a reliable publisher |
 | `SOLO_BOX`, `SOLO_BRAKE`, `SOLO_BRAKE_BOX`, `SOLO_BRAKE_FIRST`, `SOLO_SETTLE`, `SOLO_RAMP` | optional | test area and braking of `characterize.py`, `series.py` and `place_ball.py` (see their docstrings) |
 | `SOLO_EXTRA_GROUPS`, `SOLO_EXTRA_IFACE` | optional | additional multicast groups for `listen.py` (empty by default) |
-| `SOLO_NOTIFY_CMD` | required by `auto_session.py` with a home area, else optional | an executable called as `CMD "message" "title"` for its alerts (a failing call is tried once more); unset, alerts are only printed. A session with a home area sends "session starting: ..." in its start check and starts only when the command exits 0; later alerts go out from a queue in the background (retried with backoff, never delaying a stop), and when none has been delivered for `--alert-dead` s (300) no motion step runs until one is |
+| `SOLO_NOTIFY_CMD` | required by `auto_session.py` with a home area, else optional | an executable called as `CMD "message" "title"` for its alerts (a failing call is tried once more); unset, alerts are only printed. A session with a home area sends "session starting: ..." in its start check and starts only when the command exits 0; later alerts go out from a queue in the background (retried with backoff, never delaying a stop), and when none has been delivered for `--alert-dead` s (300: from the first failed send or the oldest alert still waiting) no motion step runs until one is; a sending thread that ends is started again once, and ends the channel the second time |
 | `SOLO_PYTHON` | optional | the Python `auto_session.py` runs its steps with (default `python3`) |
 
 Usual start sequence:
@@ -68,7 +68,9 @@ robot of our colour and id seen farther from it than 0.15 m + `--max-speed` (2.0
 been moving since then (every interval a motion step or the strategy node ran, each extended by `--settle` s, 1.5,
 after its stop for the reaction delay and braking) is "which robot is ours was lost": the session holds until our
 robot is seen back at that position. A camera dropout or a stop at full speed stays inside that allowance; a robot
-standing still allows 0.15 m.
+standing still allows 0.15 m. Another robot counts from its second consecutive frame of one camera (or after
+0.1 s without a newer frame of that camera), so a single false detection stops nothing; the robot the tools drive
+is compared with ours only while ours was detected within the last 0.1 s.
 
 `hq.py`, `auto_session.py` and `place_ball.py` share `procs.py`: the list of programs that command the robot (the
 strategy node and every tool here that publishes velocity commands), the test for a running instance of one, and the
