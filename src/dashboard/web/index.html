@@ -1,0 +1,109 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ssl dashboard</title>
+<style>
+ body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#ddd;display:flex;flex-direction:column;height:100vh}
+ #top{padding:.4rem 1rem;display:flex;gap:1rem;align-items:center;flex-wrap:nowrap;white-space:nowrap;overflow:hidden;font-size:.9rem;background:#1a1a1a;border-bottom:1px solid #333}
+ #ref{font-family:ui-monospace,monospace;color:#9cf;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis} #warn{color:#f88}
+ label{display:flex;gap:.3rem;align-items:center} kbd{background:#333;padding:0 .3rem;border-radius:.2rem;font-family:ui-monospace,monospace}
+ #field{flex:1;display:block;width:100%}
+ #bottom{display:flex;gap:1rem;align-items:center;padding:.3rem 1rem;background:#161616;border-top:1px solid #333;font-size:.85rem}
+ #scrub{flex:1} #info{font-family:ui-monospace,monospace;white-space:pre;font-size:.8rem;color:#bbb;height:7rem;box-sizing:border-box;overflow:auto;padding:.3rem 1rem;background:#141414;flex:none}
+</style></head><body>
+<div id="top">
+ <b>ssl dashboard</b> <span id="conn">connecting…</span>
+ <span id="ref"></span>
+ <label><input id="layer_obs" type="checkbox" checked> obstacles</label>
+ <label><input id="layer_pred" type="checkbox" checked> predictions</label>
+ <label><input id="layer_plan" type="checkbox" checked> plans</label>
+ <label><input id="layer_cmd" type="checkbox" checked> commands</label>
+ <label><input id="layer_yellow" type="checkbox" checked> yellow debug</label>
+ <label><input id="freeze" type="checkbox"> freeze (<kbd>space</kbd>)</label>
+ <span id="warn"></span>
+</div>
+<canvas id="field"></canvas>
+<div id="bottom"><span>history</span><input id="scrub" type="range" min="0" max="0" value="0" disabled><span id="scrubv"></span><span><kbd>←</kbd>/<kbd>→</kbd> tick &middot; <kbd>c</kbd> clear</span></div>
+<div id="info"></div>
+<script>
+const cv = document.getElementById('field'), ctx = cv.getContext('2d');
+let frames = [], cursor = -1, frozen = false, scale = 100, ox = 0, oy = 0, field = [4.5, 3, 0.5];
+const MAXF = 20 * 20;   // 20 s at 20 Hz
+const R = 0.09;
+const $ = (id) => document.getElementById(id);
+function fit() { cv.width = cv.clientWidth; cv.height = cv.clientHeight; const L = field[0], W = field[1], m = field[2] || 0.3;
+  scale = Math.min(cv.width / (L + 2 * m + 0.4), cv.height / (W + 2 * m + 0.4)); ox = cv.width / 2; oy = cv.height / 2; }
+const X = (x) => ox + x * scale, Y = (y) => oy - y * scale;
+function connect() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onopen = () => { $('conn').textContent = 'live'; };
+  ws.onclose = () => { $('conn').textContent = 'disconnected, retrying…'; setTimeout(connect, 1000); };
+  ws.onmessage = (e) => { const f = JSON.parse(e.data); frames.push(f); if (frames.length > MAXF) frames.shift();
+    if (f.field && (f.field[0] !== field[0] || f.field[1] !== field[1] || f.field[2] !== field[2])) { field = f.field; fit(); }
+    if (!frozen) { cursor = frames.length - 1; } else { cursor = Math.min(cursor, frames.length - 1); }
+    $('scrub').max = frames.length - 1; if (!frozen) $('scrub').value = cursor; };
+}
+function circle(x, y, r, fill, stroke, width = 1, dash = null) { ctx.beginPath(); ctx.arc(X(x), Y(y), r * scale, 0, 7); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width; if (dash) ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]); } }
+function line(a, b, stroke, width = 1, dash = null) { ctx.beginPath(); ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); ctx.strokeStyle = stroke; ctx.lineWidth = width; if (dash) ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]); }
+function drawDebug(d, color) {
+  if (!d) return;
+  const dim = d.stale ? 0.35 : 1;
+  ctx.globalAlpha = dim;
+  if ($('layer_obs').checked) for (const o of d.obstacles) {
+    if (o.kind === 'rect') { const col = o.zone ? '255,80,80' : '200,200,200'; ctx.fillStyle = `rgba(${col},.10)`; ctx.fillRect(X(o.lo[0]), Y(o.hi[1]), (o.hi[0] - o.lo[0]) * scale, (o.hi[1] - o.lo[1]) * scale); ctx.strokeStyle = `rgba(${col},.6)`; ctx.lineWidth = 1; ctx.strokeRect(X(o.lo[0]), Y(o.hi[1]), (o.hi[0] - o.lo[0]) * scale, (o.hi[1] - o.lo[1]) * scale); continue; }
+    if (o.kind === 'traj') { for (let k = 0; k < o.path.length; k += 2) circle(o.path[k][0], o.path[k][1], o.r, null, 'rgba(120,200,255,.25)', 1); continue; }
+    const col = o.zone ? 'rgba(255,140,0,' : 'rgba(255,230,0,';
+    circle(o.c[0], o.c[1], o.r, col + '.12)', col + '.7)', 1); circle(o.c[0], o.c[1], o.hard, null, col + '.9)', 1, [4, 4]);
+    if ($('layer_pred').checked && (Math.hypot(o.v[0], o.v[1]) > 0.05 || o.grow_a > 0)) {
+      for (const f of [0.33, 0.66, 1.0]) { const tt = f * o.horizon; const g = Math.min(o.grow_cap, 0.5 * o.grow_a * tt * tt); circle(o.c[0] + o.v[0] * tt, o.c[1] + o.v[1] * tt, o.r + g, null, col + '.35)', 1); }
+      line(o.c, [o.c[0] + o.v[0] * o.horizon, o.c[1] + o.v[1] * o.horizon], col + '.6)', 1, [2, 4]);
+    }
+  }
+  if ($('layer_plan').checked) for (const p of d.plans) {
+    const c = p.braking ? '#f33' : (p.escape ? '#f80' : (color === 'blue' ? '#4ad0ff' : '#ffd54a'));
+    circle(p.target[0], p.target[1], 0.06, null, c, 2); line(p.target, [p.target[0], p.target[1]], c);
+    if (p.path.length > 1) { ctx.beginPath(); ctx.moveTo(X(p.path[0][0]), Y(p.path[0][1])); for (const q of p.path) ctx.lineTo(X(q[0]), Y(q[1])); ctx.strokeStyle = c; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.fillStyle = '#fff'; for (let k = 0; k < p.path.length; k += Math.max(1, Math.round(0.25 / p.path_dt))) { ctx.beginPath(); ctx.arc(X(p.path[k][0]), Y(p.path[k][1]), 2, 0, 7); ctx.fill(); } }
+    if (p.sub) { line(p.p, p.sub, c, 1, [3, 4]); ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(p.sub[0]) - 6, Y(p.sub[1]) - 6); ctx.lineTo(X(p.sub[0]) + 6, Y(p.sub[1]) + 6); ctx.moveTo(X(p.sub[0]) + 6, Y(p.sub[1]) - 6); ctx.lineTo(X(p.sub[0]) - 6, Y(p.sub[1]) + 6); ctx.stroke(); }
+    if (p.hit_t !== null && p.hit_t !== undefined) { const k = Math.min(p.path.length - 1, Math.round(p.hit_t / p.path_dt)); circle(p.path[k][0], p.path[k][1], 0.05, null, '#f33', 2); }
+    ctx.fillStyle = c; ctx.font = '11px ui-monospace,monospace'; ctx.fillText(`r${p.i} ${p.kind}${p.braking ? ' BRAKE' : ''}${p.hit_what ? ' hit ' + p.hit_what : ''}`, X(p.p[0]) + 12, Y(p.p[1]) - 12);
+  }
+  ctx.globalAlpha = 1;
+}
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const f = cursor >= 0 ? frames[cursor] : null;
+  const L = field[0], W = field[1], m = field[2] || 0.3;
+  ctx.fillStyle = '#1e5a2a'; ctx.fillRect(X(-L / 2 - m), Y(W / 2 + m), (L + 2 * m) * scale, (W + 2 * m) * scale);
+  ctx.strokeStyle = '#e33'; ctx.lineWidth = 2; ctx.strokeRect(X(-L / 2 - m), Y(W / 2 + m), (L + 2 * m) * scale, (W + 2 * m) * scale);
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = 2; ctx.strokeRect(X(-L / 2), Y(W / 2), L * scale, W * scale);
+  line([0, W / 2], [0, -W / 2], '#eee', 2); circle(0, 0, 0.5, null, '#eee', 2);
+  for (const s of [-1, 1]) { ctx.strokeRect(X(s * L / 2 - (s > 0 ? 0.5 : 0)), Y(1.35 / 2), 0.5 * scale, 1.35 * scale); ctx.strokeStyle = '#eee'; ctx.strokeRect(X(s * L / 2 + (s > 0 ? 0 : -0.18)), Y(0.4), 0.18 * scale, 0.8 * scale); }
+  if (!f) { requestAnimationFrame(draw); return; }
+  if (f.game && f.game.placement) circle(f.game.placement[0], f.game.placement[1], 0.15, null, '#f0f', 1, [3, 3]);
+  drawDebug(f.debug.blue, 'blue'); if ($('layer_yellow').checked) drawDebug(f.debug.yellow, 'yellow');
+  for (const [c, col] of [['blue', '#3af'], ['yellow', '#ffe600']]) for (const [i, p] of Object.entries(f.robots[c])) {
+    circle(p[0], p[1], R, col, '#000', 1); line([p[0], p[1]], [p[0] + Math.cos(p[2]) * R, p[1] + Math.sin(p[2]) * R], '#000', 2);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 10px system-ui'; ctx.fillText(i, X(p[0]) - 3, Y(p[1]) + 4);
+    const cmd = f.cmd[c][i];
+    if ($('layer_cmd').checked && cmd) { const vx = Math.cos(p[2]) * cmd[0] - Math.sin(p[2]) * cmd[1], vy = Math.sin(p[2]) * cmd[0] + Math.cos(p[2]) * cmd[1]; line([p[0], p[1]], [p[0] + vx * 0.5, p[1] + vy * 0.5], '#fff', 2); }
+  }
+  if (f.ball) { circle(f.ball[0], f.ball[1], 0.035, '#ff8c00', null); }
+  const g = f.game, r = f.referee;
+  $('ref').textContent = (g ? `${g.state}${g.for_team !== 'UNKNOWN' ? '/' + g.for_team : ''}${g.ball_in_play ? ' (in play)' : ''}` : 'no referee') + (r ? `  cmd ${r.command}  next ${r.next || '-'}  Y ${r.score[0]}:${r.score[1]} B  bots ${r.max_bots[0]}/${r.max_bots[1]}  ${r.events.slice(-3).join(',')}` : '')
+    + `  | active: blue=${f.active.blue ? f.active.blue.behavior + (f.active.blue.benched && f.active.blue.benched.length ? ' (bench: r' + f.active.blue.benched.join(', r') + ')' : '') : '-'} yellow=${f.active.yellow ? f.active.yellow.behavior + (f.active.yellow.benched && f.active.yellow.benched.length ? ' (bench: r' + f.active.yellow.benched.join(', r') + ')' : '') : '-'}`;
+  const lines = [];
+  for (const c of ['blue', 'yellow']) { const d = f.debug[c]; if (!d || (c === 'yellow' && !$('layer_yellow').checked)) continue;
+    lines.push(`${c} ${d.behavior} [${d.state}/${d.for_team}] cap ${d.cap.toFixed(2)} obstacles: ${d.obstacles.map(o => o.name).join(' ')}${d.stale ? '  (STALE)' : ''}`);
+    for (const p of d.plans) lines.push(`  r${p.i} ${p.kind.padEnd(24)} T=${p.T}s target=(${p.target[0]},${p.target[1]}) vmax=${p.vmax} v_cmd=(${p.v_cmd[0]},${p.v_cmd[1]})${p.hit_what ? ' HIT ' + p.hit_what + '@' + p.hit_t : ''}${p.braking ? ' BRAKE' : ''}${p.allowed.length ? ' allowed:' + p.allowed : ''}`); }
+  $('info').textContent = lines.join('\n');
+  $('scrubv').textContent = frozen ? `${cursor + 1}/${frames.length}  (${((frames[frames.length - 1].t - f.t)).toFixed(2)} s ago)` : 'live';
+  requestAnimationFrame(draw);
+}
+$('freeze').addEventListener('change', (e) => { frozen = e.target.checked; $('scrub').disabled = !frozen; });
+$('scrub').addEventListener('input', (e) => { if (frozen) cursor = +e.target.value; });
+window.addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { $('freeze').checked = !$('freeze').checked; $('freeze').dispatchEvent(new Event('change')); e.preventDefault(); }
+  if (frozen && e.key === 'ArrowLeft') { cursor = Math.max(0, cursor - 1); $('scrub').value = cursor; }
+  if (frozen && e.key === 'ArrowRight') { cursor = Math.min(frames.length - 1, cursor + 1); $('scrub').value = cursor; }
+  if (e.key === 'c') { frames = []; cursor = -1; } });
+window.addEventListener('resize', fit); fit(); connect(); requestAnimationFrame(draw);
+</script></body></html>

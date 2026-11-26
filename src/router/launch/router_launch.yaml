@@ -1,0 +1,28 @@
+launch:
+
+- arg:
+    name: "team"
+    default: "blue"
+- arg:
+    name: "robot_count"
+    default: "3"
+- arg:
+    # behavior to run when no referee is publishing: "halt" (match) or "rl" (play without a game controller)
+    name: "no_referee_behavior"
+    default: "halt"
+
+- node:
+    pkg: "router"
+    exec: "router"
+    name: "router"
+    namespace: $(var team)
+    param:
+    -
+        name: team
+        value: $(var team)
+    -
+        name: robot_count
+        value: $(var robot_count)
+    -
+        name: no_referee_behavior
+        value: $(var no_referee_behavior)

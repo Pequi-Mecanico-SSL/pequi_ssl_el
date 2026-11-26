@@ -28,6 +28,11 @@ launch:
     # (expected to degrade ball-contact behaviors; experiments only)
     name: "scale"
     default: "1.0"
+- arg:
+    # "" = drive /<team>/robot<i>/cmd_vel directly; "rl" = publish under
+    # /<team>/behaviors/rl/ and let the router relay when active
+    name: "behavior_name"
+    default: ""
 
 - node:
     pkg: "rl_strategy"
@@ -58,3 +63,6 @@ launch:
     -
         name: scale
         value: $(var scale)
+    -
+        name: behavior_name
+        value: $(var behavior_name)

@@ -1,0 +1,10 @@
+launch:
+- arg:
+    name: "port"
+    default: "8093"
+- node:
+    pkg: "dashboard"
+    exec: "dashboard"
+    name: "dashboard"
+    param:
+    - {name: port, value: $(var port)}

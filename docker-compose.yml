@@ -125,17 +125,57 @@ services:
 
   # RL strategy: vendored RL policy driving /<team>/robot<i>/cmd_vel from
   # /vision/poses/*. Topics carry real-world SI; the training-frame scaling is
-  # internal to the package.
+  # internal to the package. behavior_name:=rl publishes under
+  # /<team>/behaviors/rl/ so the router relays it only while the game is running.
   rl_strategy:
     container_name: ssl_rl_strategy
     build:
       context: .
       dockerfile: Dockerfile.x86
-    command: ros2 launch rl_strategy rl_strategy_launch.yaml
+    command: ros2 launch rl_strategy rl_strategy_launch.yaml behavior_name:=rl
     network_mode: host
     ipc: host
     volumes:
       - ./src:/ssl_ws/src:ro
+
+  # ---- referee stack ------------------------------------------------------
+  # The rules package (import sslrules, checked out at ../ssl-rules) is an
+  # external package (not part of this repository): it is mounted and put on
+  # PYTHONPATH here.
+
+  # Referee input adapter: ssl-game-controller multicast (224.5.23.1:10003)
+  # -> /referee/state (decoded wire message) and /referee/game_state (derived
+  # state incl. ball-in-play, which needs /vision/poses/ball).
+  referee_connector:
+    container_name: ssl_referee_connector
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch referee_connector referee_connector_launch.yaml
+    network_mode: host
+    ipc: host
+    environment:
+      - PYTHONPATH=/ssl_ws/ext/ssl-rules/src
+    volumes:
+      - ./src:/ssl_ws/src:ro
+      - ../ssl-rules/src:/ssl_ws/ext/ssl-rules/src:ro
+
+  # Behavior router for one team: game state -> active behavior; relays
+  # /<team>/behaviors/<active>/robot<i>/cmd_vel to /<team>/robot<i>/cmd_vel.
+  # No referee on the network -> halt (no_referee_behavior:=rl to play without one).
+  router:
+    container_name: ssl_router
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch router router_launch.yaml team:=blue
+    network_mode: host
+    ipc: host
+    environment:
+      - PYTHONPATH=/ssl_ws/ext/ssl-rules/src
+    volumes:
+      - ./src:/ssl_ws/src:ro
+      - ../ssl-rules/src:/ssl_ws/ext/ssl-rules/src:ro
 
   # Vision input adapter: SSL wire-protocol UDP -> /vision/poses/* topics
   # (real-world SI, right-handed). Real ssl-vision (:10006, mirror on) by
@@ -148,6 +188,19 @@ services:
       context: .
       dockerfile: Dockerfile.x86
     command: ros2 launch ssl_vision_connector ssl_vision_connector_launch.yaml
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./src:/ssl_ws/src:ro
+
+  # Live dashboard: http://<host>:8093 - vision, referee, routers and the debug topics of whatever
+  # behaviors publish on /<team>/behaviors/<name>/debug, with freeze and scrub.
+  dashboard:
+    container_name: ssl_dashboard
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    command: ros2 launch dashboard dashboard_launch.yaml
     network_mode: host
     ipc: host
     volumes:

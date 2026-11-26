@@ -13,6 +13,10 @@ Publishes (body frame, REP-103: x forward, y left, z CCW), one topic per
 robot under the per-robot namespace convention:
     /<team>/robot<i>/cmd_vel               geometry_msgs/Twist   (m/s, rad/s)
 
+With ``behavior_name`` set (e.g. "rl") the commands go to
+    /<team>/behaviors/<behavior_name>/robot<i>/cmd_vel
+instead, where the router relays them while this is the active behavior.
+
 When robot_control is launched under the namespace /<color>/robot<i>
 (e.g. ROS_NAMESPACE=/yellow/robot0), its cmd_vel subscription lands on this
 topic without remapping; otherwise remap cmd_vel accordingly.
@@ -20,7 +24,13 @@ topic without remapping; otherwise remap cmd_vel accordingly.
 Safety follows the reference deploy script: while the team has no fresh
 vision, publish zero Twists and do not advance the observation stack.
 """
+import os
 import time
+
+# The policy net is tiny (616-300-200-100-8); one BLAS/OpenMP thread is plenty and
+# avoids torch grabbing every core of the host per node instance.
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
 
 import rclpy
 from rclpy.node import Node
@@ -64,6 +74,9 @@ class RLStrategyNode(Node):
                 ('solo_cmd_topic', ''),
                 ('solo_pose_topic', '/vision/poses/yellow/robot0'),
                 # Real-hardware caps applied at the very edge (0.0 = uncapped).
+                # '' = drive /<team>/robot<i>/cmd_vel directly;
+                # 'rl' = publish under /<team>/behaviors/rl/ for the router
+                ('behavior_name', ''),
                 ('cmd_speed_cap', 0.0),      # m/s, linear norm
                 ('cmd_angular_cap', 0.0),    # rad/s
             ]
@@ -120,9 +133,11 @@ class RLStrategyNode(Node):
                     self.create_subscription(
                         Pose2D, f'/vision/poses/{color}/robot{i}',
                         lambda msg, c=color, i=i: self._pose_cb(msg, c, i), 10)
+            behavior = gp('behavior_name').string_value
+            prefix = f'/{self.team}/behaviors/{behavior}' if behavior else f'/{self.team}'
             self.cmd_pubs = {
                 i: self.create_publisher(
-                    Twist, f'/{self.team}/robot{i}/cmd_vel', 10)
+                    Twist, f'{prefix}/robot{i}/cmd_vel', 10)
                 for i in range(self.n_robots[self.team])
             }
         self.create_subscription(Pose2D, '/vision/poses/ball', self._ball_cb, 10)
