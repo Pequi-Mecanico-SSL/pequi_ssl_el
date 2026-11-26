@@ -1,6 +1,7 @@
 """Tests of tools/solo/auto_session.py: our robot's identity after its tag drops out (continuity, reappearance, lost),
-the identity probe (a commanded turn on the spot watched in the raw vision), the shorter clear time of a hold whose
-only cause was our robot not seen, and the end alert when the alert sender has stopped. Fakes for the field (no
+the identity probe (a commanded turn on the spot watched in the raw vision; a child that did not turn gives no
+verdict), the shorter clear time of a hold whose only cause was our robot not seen, the start check of the vision's
+mirror setting, and the end alert when the alert sender has stopped. Fakes for the field (no
 robot, ROS or network): the simulated robot turns when a spin child runs; a twin does not.
     uv run --with pytest pytest -q tools/solo/tests/test_identity_probe.py"""
 import math, os, sys
@@ -12,6 +13,7 @@ from test_home_safety import make_cams, OURS  # noqa: E402
 from test_alerts_identity import clean_session, PROBES  # noqa: E402
 
 START, GOAL = (-2.0, -1.2), (-0.5, 1.2)
+FOUND = "our robot recognised by its turn at (-0.98, +0.43): the session resumes"
 NOT_OURS = "did not follow a commanded turn: it is not ours, or ours does not respond; the session holds"
 
 
@@ -62,7 +64,7 @@ def test_a_twin_appearing_late_where_ours_vanished_at_speed_is_never_taken_as_ou
         lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
         assert lost and "ours unseen for 19." in lost[0], twin_at
 
-def test_a_second_copy_seen_before_ours_drops_out_makes_a_reappearance_within_0_5_m_lost():
+def test_a_second_copy_seen_before_ours_drops_out_makes_a_close_reappearance_lost():
     P = {}
     def others(dt):                                        # a twin 0.5 m from ours, seen while ours still is
         if dt >= 1.0:
@@ -72,27 +74,54 @@ def test_a_second_copy_seen_before_ours_drops_out_makes_a_reappearance_within_0_
     assert s.done == [] and (s.ours_lost is not None or s.not_ours)
     assert s.us_last is None or math.hypot(s.us_last["x"] - P["p"][0], s.us_last["y"] - P["p"][1]) > 0.1   # never anchored on the twin
 
-def test_our_robot_reappearing_within_0_5_m_after_a_long_dropout_is_ours():
+def reappear_after_dropout(moved):
+    """a spin with our robot at (-1, 0); its tag is not detected from 2 s to 6 s, and at 4 s it is moved `moved` m
+    along +x (the connector follows it)"""
     D = {}
     def frames(t):
         dt = t - D["t0"]
-        if dt >= 4.0: world.set(robot=(-0.7, 0.0, 0.0))       # moved 0.3 m while unseen (the connector follows it)
+        if dt >= 4.0 and "moved" not in D: D["moved"] = True; world.set(robot=(-1.0 + moved, 0.0, world.robot[2]))
         if 2.0 <= dt < 6.0: return {0: []}                 # 4 s unseen while a spin runs
         return {0: [("blue", 3, *world.robot[:3])]}
     s, run, note, world, clk = make_cams([SPIN(label="a"), SPIN(label="b")], frames, budget=120, switch_after=0)
     D["t0"] = clk.t
     world.set(robot=(-1.0, 0.0, 0.0)); s.run()
+    return s, run, note
+
+def test_our_robot_reappearing_within_0_15_m_after_a_long_dropout_is_ours_without_a_probe():
+    s, run, note = reappear_after_dropout(0.12)
     assert s.ours_lost is None and s.done == [1, 2] and not [m for m in alerts(note) if "which robot is ours" in m]
+    assert s.probes_run == 0 and not PROBES(run)
+
+def test_our_robot_reappearing_0_3_m_away_after_a_long_dropout_is_lost_then_proved_by_its_turn():
+    s, run, note = reappear_after_dropout(0.3)
+    lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
+    assert lost and "0.30 m from where ours last stood" in lost[0] and "(at most 0.15 m, ours unseen for 4." in lost[0]
+    assert s.ours_lost is None and s.done == [1, 2] and s.probes_run == 1 and len(PROBES(run)) == 2
+    assert "our robot recognised by its turn at (-0.70, +0.00): the session resumes" in alerts(note)
+
+def test_a_twin_first_seen_0_3_or_0_45_m_beyond_where_ours_vanished_is_lost_and_fails_the_probe():
+    ux, uy = GOAL[0] - START[0], GOAL[1] - START[1]; L = math.hypot(ux, uy); ux, uy = ux / L, uy / L
+    van = (START[0] + ux * 1.0, START[1] + uy * 1.0)        # where ours vanished: 1 s at 1 m/s
+    for off in (0.3, 0.45):
+        for t_twin in (3.0, 20.0):
+            tw = (van[0] + ux * off, van[1] + uy * off)
+            s, run, note, clk, t0 = twin_late(tw, t_twin=t_twin, budget=120)
+            lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
+            assert lost and s.ours_lost is not None and s.done == [] and not s.not_ours, (off, t_twin)
+            assert len(run.cmds("goto.py")) == 1 and not [c for c in run.cmds("characterize.py") if " spin 3.0 " in c], (off, t_twin)
+            assert s.probes_run >= 1 and [m for m in alerts(note) if NOT_OURS in m], (off, t_twin)
+            assert not [m for m in alerts(note) if "recognised" in m] and not note.quiet, (off, t_twin)
 
 
 # ---- 3. the identity probe
-def test_lost_after_a_dropout_at_speed_beyond_0_5_m_is_resolved_by_the_probe_and_the_session_goes_on():
+def test_lost_after_a_dropout_at_speed_beyond_0_15_m_is_resolved_by_the_probe_and_the_session_goes_on():
     s, run, note, clk, starts, checks = clean_session(1.0, (1.0, 1.0))
     pc = [c for c in run.calls if c["cmd"] in PROBES(run)]
     assert s.ours_lost is None and s.done == [1, 2] and s.probes_run == 1 and len(pc) == 2
     assert sorted(c["cmd"].split(" spin ")[1].split()[0] for c in pc) == ["+1.50", "-1.50"]
     assert all(c["watched"] and c["env"]["SOLO_BOX"] == "-1.23,-0.73,0.18,0.68" for c in pc)
-    assert note.quiet == ["our robot recognised by its turn at (-0.98, +0.43)"]
+    assert not note.quiet and alerts(note)[-1] == FOUND
 
 def test_a_twin_appearing_late_fails_the_probe_and_the_session_holds_with_the_alert():
     s, run, note, clk, t0 = twin_late((-1.0, 0.5))
@@ -129,7 +158,7 @@ def test_another_robot_entering_during_the_probe_stops_it():
     finally: A.SimRunner.run = go
     stopped = [w for t, w in run.stops if w.startswith("another robot: yellow1")]
     assert stopped and s.probes_run == 2 and s.ours_lost is None and s.done == [1, 2]
-    assert note.quiet == ["our robot recognised by its turn at (-0.98, +0.43)"]
+    assert not note.quiet and alerts(note)[-1] == FOUND
 
 def test_the_probes_of_a_session_are_limited_and_the_hold_then_says_so():
     s, run, note, clk, t0 = twin_late((-1.0, 0.5), probes=2, budget=400)
@@ -167,6 +196,54 @@ def test_the_probe_does_not_start_while_another_robot_is_near_the_candidate_or_a
         late = [t for t, r in probe_children(run) if t - D["t0"] >= 20]
         assert not late and s.ours_lost is not None, extra
 
+def aborting_probes(n_abort, line="robot not in vision", rc=1):
+    """SimRunner.run with the first n_abort probe children ending at once with `line` and exit code rc (a child that
+    did not turn); -> (the patched run, the original)"""
+    go = A.SimRunner.run; k = [0]
+    def run_(self, argv, env, timeout, tee=None, watch=None):
+        if "spin" in argv and argv[argv.index("spin") + 2] == "0.70" and k[0] < n_abort:
+            k[0] += 1; self.calls.append(dict(cmd=" ".join(argv), env=env, timeout=timeout, watched=watch is not None))
+            data, ln = A.result_of([line if isinstance(line, str) else A.json.dumps(line)])
+            return dict(rc=rc, timed_out=False, line=ln, data=data, t0=self.clock(), t1=self.clock())
+        return go(self, argv, env, timeout, tee=tee, watch=watch)
+    return run_, go
+
+def logged(kinds):
+    """Session.log recording (time, kind, fields) of the given kinds; -> (the record, the original log)"""
+    rec = []; log = A.Session.log
+    def log_(self, kind, **kw):
+        if kind in kinds: rec.append((self.clock(), kind, kw))
+        return log(self, kind, **kw)
+    return rec, log_, log
+
+def test_a_probe_child_that_did_not_turn_gives_no_verdict_and_the_next_probe_runs_after_10_s():
+    cases = {"not in vision": ("robot not in vision", 1, "(rc 1): robot not in vision"),
+             "interrupted": (dict(test="spin", args=["+1.50", "0.70"], interrupted=True, signal=2), 130, "(rc 130): {")}
+    for name, (line, rc, why) in cases.items():
+        run_, go = aborting_probes(1, line, rc); rec, log_, log = logged(("probe_start", "probe_verdict", "probe_stopped"))
+        A.SimRunner.run = run_; A.Session.log = log_
+        try: s, run, note, clk, starts, checks = clean_session(1.0, (1.0, 1.0))
+        finally: A.SimRunner.run = go; A.Session.log = log
+        v = [(t, k) for t, kind, k in rec if kind == "probe_verdict"]
+        assert v[0][1]["ok"] is None and v[0][1]["no_verdict"].startswith("the probe child did not complete its turn " + why), name
+        assert v[1][1]["ok"] is True and not [r for r in rec if r[1] == "probe_stopped"], name
+        st = [t for t, kind, k in rec if kind == "probe_start"]
+        assert len(st) == 2 and st[1] - v[0][0] >= 10.0 - 1e-6, name
+        assert s.ours_lost is None and s.done == [1, 2] and s.probes_run == 2 and s.probe_bad == [], name
+        assert not [m for m in alerts(note) if NOT_OURS in m] and alerts(note)[-1] == FOUND, name
+
+def test_probes_without_a_verdict_count_and_the_last_alert_says_how_many_and_why():
+    run_, go = aborting_probes(99)
+    A.SimRunner.run = run_
+    try: s, run, note, clk, t0 = twin_late((-1.0, 0.5), probes=2, budget=200)
+    finally: A.SimRunner.run = go
+    ch = probe_children(run)
+    assert s.probes_run == 2 and len(ch) == 2 and ch[1][0] - ch[0][0] < 60.0      # no 60 s ban at that place
+    assert s.ours_lost is not None and s.done == [] and not [m for m in alerts(note) if NOT_OURS in m]
+    out = [m for m in alerts(note) if m.startswith("no identity probe left")]
+    assert out == ["no identity probe left (2 used, 2 without a verdict, the last: the probe child did not complete its turn "
+                   "(rc 1): robot not in vision): the session holds: put the robot back at (-1.47, -0.35) or restart the session"]
+
 
 # ---- 4. a hold caused only by our robot unseen
 def restart_after(frames_extra=lambda dt: [], gap=(2.0, 3.0), camera_off=False):
@@ -194,7 +271,26 @@ def test_a_hold_with_another_cause_keeps_the_full_clear_time():
     assert why == "no information: our robot (blue 3) not seen in the vision" and dt >= 4.9
 
 
-# ---- 5. the end alert without the sender thread
+# ---- 5. the start check of the vision's mirror setting
+def test_the_start_check_refuses_a_heading_that_differs_from_the_page_and_names_vision_mirror():
+    cases = {"sign flipped": (0.8, -0.8, "the same with its sign flipped"), "far off": (0.8, 2.4, ""),
+             "agree": (0.8, 0.6, None), "no heading on the page": (0.8, None, None), "no heading in the raw view": (None, 0.8, None)}
+    for name, (raw, page, flip) in cases.items():
+        det = ("blue", 3, -1.0, 0.3) + (() if raw is None else (raw,))
+        s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [det]}, robot=(-1.0, 0.3) + (() if page is None else (page,)), budget=30)
+        rec = []; log = s.log
+        s.log = lambda kind, **k: (rec.append((kind, k)), log(kind, **k))[1]
+        why = s.preflight()
+        if flip is None:
+            assert why is None, name
+            assert bool([k for kind, k in rec if kind == "heading_check" and "skipped" in k]) == (raw is None or page is None), name
+        else:
+            assert why and "--vision-mirror" in why and why.startswith("our robot's heading in the raw vision (+0.80 rad)"), (name, why)
+            assert (flip in why) if flip else ("sign flipped" not in why), name
+            assert not note.sent, name                                    # no start alert: the session does not start
+
+
+# ---- 6. the end alert without the sender thread
 def test_the_session_ended_alert_is_sent_directly_when_the_sender_thread_has_ended():
     s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OURS]}, budget=30, alert_thread=True)
     assert s.preflight() is None

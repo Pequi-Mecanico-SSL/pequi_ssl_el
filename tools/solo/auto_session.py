@@ -79,7 +79,7 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   works; its edges inside the field (more than 0.3 m from the lines) are "open": the side other teams use. Options:
   --corridor M (0.7), --fetch-wait S (60), --park X,Y (or "park" in the header), --intrude-dist M (1.0), --clear S (5),
   --hold-limit S (120), --ball-hold S (30), --fetch-limit M (1.0), --info-alert S (10), --alert-dead S (300), --settle S
-  (1.5), --max-speed M/S (2.0), --reappear M (0.5), --probes N (6; 0 = no identity probe), --probe-rate RAD/S (1.5),
+  (1.5), --max-speed M/S (2.0), --reappear M (0.15), --probes N (6; 0 = no identity probe), --probe-rate RAD/S (1.5),
   --probe-time S (0.7), --clear-own S (1.5); --no-ball (or "ball": "ignore")
   for a session that never touches a ball.
   Required with a home area: --our-id N (or SOLO_OUR_ID=N), our robot's vision id; the field's cameras, --cameras N
@@ -101,7 +101,8 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   $SOLO_IFACE or 0.0.0.0; --vision-mirror when the connector runs with mirror:=true) and sees every robot of both
   colours with its vision id; our robot is the detection of our colour and id within 0.25 m of the robot the tools
   drive. A robot of another colour or id counts from its second sighting by one camera within 0.25 s (any two frames:
-  a robot detected in every other frame counts), and then until its sighting expires (0.5 s); a sighting within 0.2 m
+  a robot detected in every other frame counts), or within 1.0 s when it lies within 0.2 m + 2 m/s x the gap of the
+  first (a robot detected only now and then), and then until its sighting expires (0.5 s); a sighting within 0.2 m
   of one of another colour or id of the last 0.25 s counts at once (an id read differently from frame to frame; our
   robot's sightings do not confirm another), and so does one whose camera sends no newer frame within 0.1 s: a single
   isolated false detection stops nothing. Two
@@ -114,7 +115,9 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   two copies were seen, only the copy the anchor followed until 0.15 s before), or when ours was unseen for 0.5 s or
   more, it is within --reappear m of the anchor (0.15 m when it stood) and no second copy was seen since the anchor.
   Anything else is "which robot is ours was lost: ..." (no information, alerted at once, "...: put the robot back at
-  (x, y) or restart the session"); it clears when one robot of our colour and id has been seen within 0.15 m of that
+  (x, y) or restart the session; the session will try to recognise it by a short turn on the spot", the last part
+  while probes are left); when that alert went out, its recovery is alerted too: "our robot recognised by its turn at
+  (x, y): the session resumes" or "our robot seen again at its place (x, y): the session resumes"; it clears when one robot of our colour and id has been seen within 0.15 m of that
   position for --clear s, or by the identity probe, never by time alone.
   IDENTITY PROBE: while which robot is ours is lost, the supervisor may prove whether the one robot of our colour and
   id in view (the candidate) is ours: when for --clear s the vision has been fresh, exactly one robot of our colour
@@ -124,10 +127,12 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   <+-rate> <time>` (--probe-rate, --probe-time; SOLO_BOX 0.25 m round the candidate), 0.5 s apart, watched (no
   information, another robot inside or near, the candidate moving 0.10 m stop it). The candidate's heading must change
   in the commanded direction by 0.4 to 1.6 x rate x time in each turn (read before the child and 0.3 s after it ended)
-  and it must move less than 0.10 m: then identity is anchored on it and a quiet notice says "our robot recognised by
-  its turn at (x, y)"; else the alert "the robot seen as blue 3 at (x, y) did not follow a commanded turn: it is not
+  and it must move less than 0.10 m: then identity is anchored on it (the alert above; a quiet notice with the same
+  text when no lost alert went out); else the alert "the robot seen as blue 3 at (x, y) did not follow a commanded turn: it is not
   ours, or ours does not respond; the session holds", and no probe of a candidate at that place for 60 s. At most
-  --probes per session (the last alert says none is left). Safe while it is unknown which robot is ours: a pure turn
+  --probes per session (the last alert says none is left, how many gave no verdict and the last reason). A probe
+  child that did not complete its turn (a non-zero exit, a result line marked interrupted or aborted) gives no
+  verdict: no alert, no ban, the reason logged (probe_verdict), the next probe not before 10 s. Safe while it is unknown which robot is ours: a pure turn
   on the spot moves nobody across the field; if the candidate is another team's robot, ours only turns where it
   stands. characterize.py spin sends only an angular rate (zeros before and after), never drives to a start pose and
   uses its pose only to stop (stale, or outside SOLO_BOX). Two or more robots seen as our colour and
@@ -138,6 +143,9 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
   connector's index) must stand within 0.25 m of ours in the raw vision (ours detected within the last 0.1 s; an
   older detection kept after its camera stopped showing it is not compared): at start, else the session does not start;
   during the session, else all motion stops, "the robot the tools are driving is not ours: ..." and the session ends.
+  At start the page's heading must also agree with ours in the raw view within 0.5 rad, else the session does not
+  start and the message names --vision-mirror (a wrong mirror flips y and the heading; skipped, logged, when either
+  heading is missing).
   Start, left half: the same as above, e.g.
       python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_noball.jsonl --budget 10 --our-id N --cameras C
       python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_ball_slot_10.jsonl --budget 10 --our-id N --cameras C   (with the ball)
@@ -208,6 +216,7 @@ HOME AREA (tests confined to one half of a shared field; tools/solo/sessions/lef
     "the robot seen as blue 3 at (x, y) did not follow a commanded turn: it is not ours, or ours does not respond; the
      session holds"                         -> check our robot (powered, its radio), the other robot away from our half
                                                            -> put our robot back there, the other robot away from it
+    "our robot recognised by its turn at (x, y): the session resumes"          -> keep clear of it: it moves again
     "the session has held for 10 s without 5 s known and clear: <causes>; the session holds"
                                                          -> check the vision of our robot (tag, lights, camera)
     "the robot the tools are driving is not ours: ..."      -> check --our-id and the connector (SOLO_OWN_COUNT, ids)
@@ -678,7 +687,8 @@ class RawVision:
     (merge_dets); vision_unconfirmed: those of vision_dets not confirmed yet; vision_poses: [(colour, id, x, y,
     heading, age)] of every kept sighting that carries a heading (not merged).
     Confirmed: a colour + id of one camera seen twice within PAIR_S (in any two frames, not necessarily consecutive;
-    a robot detected in every other frame counts), and from then on until its sighting expires; or a sighting within
+    a robot detected in every other frame counts), or twice within SLOW_S with the second sighting within NEAR_D +
+    SLOW_V x the gap of the first, and from then on until its sighting expires; or a sighting within
     NEAR_D of a sighting of another colour + id of the last PAIR_S (a robot whose id is read differently from frame
     to frame; the colour + id in `own`, our robot, does not confirm another); or one whose camera sends no newer
     frame within CONFIRM_S. A single isolated sighting is not confirmed.
@@ -696,6 +706,8 @@ class RawVision:
     CONFIRM_S = 0.1                     # s: a sighting of one frame counts when its camera sends no newer frame this long
     PAIR_S = 0.25                       # s: two sightings of one colour + id within this confirm it
     NEAR_D = 0.2                        # m: a sighting this close to a recent one of another colour + id is confirmed
+    SLOW_S, SLOW_V = 1.0, 2.0           # s, m/s: a sighting within NEAR_D + SLOW_V x the gap of the last one of its colour + id
+                                        # (same camera) of the last SLOW_S s is confirmed (a robot detected only now and then)
     def feed(self, robots):
         t = self.clock(); cam = 0
         if isinstance(robots, tuple) and len(robots) == 3 and isinstance(robots[1], list): cam, robots, t = robots   # a fake's frame time
@@ -711,7 +723,9 @@ class RawVision:
             recent = [(k2, ps2) for (c2, k2), (t2, ps2, _) in self.seen.items() if k2 != self.own and t - t2 <= self.PAIR_S]
             for k, ps in fr.items():
                 old = self.seen.get((cam, k))
-                ok = old is not None and (t - old[0] <= self.PAIR_S or (old[2] and t - old[0] <= self.keep))
+                ok = old is not None and (t - old[0] <= self.PAIR_S or (old[2] and t - old[0] <= self.keep) or
+                                          (t - old[0] <= self.SLOW_S and any(math.hypot(x - x0, y - y0) <= self.NEAR_D + self.SLOW_V * (t - old[0])
+                                                                             for x0, y0, _ in old[1] for x, y, _ in ps)))
                 if not ok and k != self.own:
                     ok = any(k2 != k and math.hypot(x - x2, y - y2) <= self.NEAR_D for k2, ps2 in recent for x2, y2, _ in ps2 for x, y, _ in ps)
                 self.seen[(cam, k)] = (t, ps, ok)
@@ -1072,7 +1086,7 @@ class Session:
                  clear_s=5.0, hold_limit=120.0, ball_hold=30.0, ball_guard=0.6, edge_guard=0.9, our_id=None, vision_error=None,
                  robot_fresh=VISION_FRESH, info_alert=10.0, fetch_limit=1.0, switch_after=20.0, switch_cooldown=60.0, max_switches=4,
                  home_auto=False, cameras=None, alert_dead=300.0, alert_thread=None, settle=1.5, max_speed=2.0,
-                 reappear=0.5, probes=6, probe_rate=1.5, probe_time=0.7, clear_own=1.5):
+                 reappear=0.15, probes=6, probe_rate=1.5, probe_time=0.7, clear_own=1.5):
         self.cameras = None if cameras is None else sorted({int(c) for c in cameras})
         self.log_lock = threading.Lock(); self.alert_keys = {}; self.kinds_sent = set(); self.floor_buf = []; self.t_out = -1e18
         self.last_send = None; self.alert_dead = alert_dead; self.dead = None; self.sender_restarts = 0
@@ -1082,6 +1096,7 @@ class Session:
         self.reappear, self.clear_own = reappear, clear_own
         self.probes, self.probe_rate, self.probe_time = int(probes), float(probe_rate), float(probe_time)
         self.probes_run = 0; self.probe_bad = []; self.probe_cand = None; self.probes_out_sent = False   # the identity probe
+        self.probe_none = 0; self.probe_none_why = None; self.probe_wait = -1e18      # probes without a verdict
         self.cameras_given = None if self.cameras is None else list(self.cameras); self.cams_logged = set()
         self.switch_after = switch_after if switch_after else None; self.switch_cooldown, self.max_switches = switch_cooldown, max_switches
         self.home_auto = home_auto; self.half_sign = 1; self.switches = []; self.notices = []; self.pending = None; self.current = None
@@ -1119,7 +1134,7 @@ class Session:
         return d
     ALERT_BACKOFF = (60.0, 300.0)       # s: a repeat of one cause (kind, robot) not before this after its 1st, its 2nd and later alerts
     ALERT_FLOOR = 20.0                  # s: at most one alert this often, except the kinds in ALERT_NOW and the first of each kind
-    ALERT_NOW = ("twins", "ours_lost", "probe_fail")   # a person must get these at once (and the urgent ones: start, end, not ours)
+    ALERT_NOW = ("twins", "ours_lost", "probe_fail", "ours_found")   # a person must get these at once (and the urgent ones: start, end, not ours)
     def alert_due(self, kind, robot=None, since=None):
         """the backoff of one cause: -> True when an alert with key (kind, robot) may go out now; else the occurrence
         (since: when the cause began; one count per since, however often the caller repeats it) is counted"""
@@ -1157,6 +1172,7 @@ class Session:
                 self.log("alert_merged", message=msg, of=kind, robot=robot, note=f"sent with the next alert (at most one every {self.ALERT_FLOOR:.0f} s)")
                 return True
         self.kinds_sent.add(kind); self.dispatch(msg, title, kind, robot)
+        if kind == "ours_lost" and self.ours_lost is not None: self.ours_lost["alerted"] = True   # its recovery is alerted too
         return True
     def dispatch(self, msg, title="field session", kind=None, robot=None):
         """queue one alert for the sender, the alerts the rate floor held merged into it"""
@@ -1321,6 +1337,7 @@ class Session:
             if now - L["t_ok"] < self.clear_s: return None, f"which robot is ours was lost: {L['why']}"
             self.log("ours_found", at=[round(mine[0][2], 3), round(mine[0][3], 3)], lost_for=round(now - L["since"], 1))
             self.ours_lost = None; us = mine[0] if us is None or us is mine[0] else us
+            self.found_text(L, f"our robot seen again at its place ({mine[0][2]:+.2f}, {mine[0][3]:+.2f}): the session resumes")
         if us is not None and len(mine) == 1 and amb is None: self.keep_us(us, now, alone=True)
         elif len(mine) > 1 and self.us_last is not None:              # two copies: the one ours can have become
             p = self.us_last
@@ -1335,9 +1352,16 @@ class Session:
             if alone: self.twins_seen = False
             self.moves = [m for m in self.moves if m[1] is None or m[1] + self.settle > t_det]
     def lost_tail(self):
-        """what a person can do when which robot is ours was lost"""
+        """what a person can do when which robot is ours was lost (and, while probes are left, that one may run)"""
         L = self.ours_lost
-        return f"put the robot back at ({L['x']:+.2f}, {L['y']:+.2f}) or restart the session" if L else "restart the session"
+        if not L: return "restart the session"
+        more = "; the session will try to recognise it by a short turn on the spot" if self.probes and self.probes_run < self.probes else ""
+        return f"put the robot back at ({L['x']:+.2f}, {L['y']:+.2f}) or restart the session{more}"
+    def found_text(self, L, msg):
+        """identity recovered after L (the lost record): an alert when the lost alert went out (a person may be on the
+        way to the robot and must know it moves again), else a quiet notice"""
+        if L.get("alerted"): self.alert(msg, kind="ours_found", force=True)
+        else: self.notice(msg)
     # ---- the identity probe: which robot is ours, proved by a commanded turn on the spot
     PROBE_STILL_D, PROBE_STILL_TH = 0.03, math.radians(5.0)   # the candidate stands: moved less, turned less
     PROBE_MOVE = 0.10                   # m: the candidate translating more stops the probe; a pass needs less overall
@@ -1345,6 +1369,7 @@ class Session:
     PROBE_AFTER = 0.3                   # s after a turn's child ended before its heading is read
     PROBE_BAND = (0.4, 1.6)             # the heading change that passes, times rate x time
     PROBE_BAD_S, PROBE_BAD_D = 60.0, 0.3   # no new probe of a candidate within this of a failed one for this long
+    PROBE_RETRY = 10.0                  # s: no new probe this long after one whose child did not complete its turn
     def candidate(self, s):
         """the one robot of our colour + id in view with its heading: (x, y, heading, age), or None"""
         mine = s.get("mine") or []
@@ -1364,7 +1389,8 @@ class Session:
         preconditions have held for clear_s without a break, else None. Preconditions: vision fresh; exactly one robot of
         our colour + id seen, with a heading, standing (moved less than PROBE_STILL_D, turned less than PROBE_STILL_TH);
         no second copy; no other robot inside our watch area or within intrude_dist of it; it stands inside our half or
-        within fetch_limit beyond its open edges; no failed probe at that place within PROBE_BAD_S s; probes left"""
+        within fetch_limit beyond its open edges; no failed probe at that place within PROBE_BAD_S s; probes left; not
+        within PROBE_RETRY s of a probe whose child did not complete its turn"""
         if not self.probes or self.probes_run >= self.probes or self.ours_lost is None: self.probe_cand = None; return None
         c = None if self.vision_gap(s) else self.candidate(s)
         ok = c is not None and not self.probe_others(s, c) and in_rect(c[:2], fetch_area(self.home, self.fetch_limit))
@@ -1376,7 +1402,7 @@ class Session:
             self.probe_cand = None if c is None else dict(x=c[0], y=c[1], th=c[2], since=now)
             return None
         if pc is None: self.probe_cand = pc = dict(x=c[0], y=c[1], th=c[2], since=now)
-        return c[:3] if now - pc["since"] >= self.clear_s else None
+        return c[:3] if now - pc["since"] >= self.clear_s and now >= self.probe_wait else None
     def probe_watch(self, c0, acc):
         """the watch of a probe child: no information (vision, the alert channel, the candidate unseen or a second
         copy), another robot inside our watch area or near the candidate, the candidate translating more than
@@ -1406,15 +1432,18 @@ class Session:
         (probe_watch). Safe while it is not known which robot is ours: a pure turn on the spot moves nobody across the
         field; if the candidate is a twin, our real robot only turns where it stands. Pass: during each turn the
         candidate's heading changed in the commanded direction by PROBE_BAND x rate x time (from before the turn to
-        PROBE_AFTER s after its child ended) and it moved less than PROBE_MOVE overall -> identity anchored on it, a
-        quiet notice. Fail (no turn seen, the wrong direction, moved): identity stays lost, one alert, no new probe at
-        that place for PROBE_BAD_S s. Stopped by no information or another robot: no verdict, the hold goes on.
+        PROBE_AFTER s after its child ended) and it moved less than PROBE_MOVE overall -> identity anchored on it, an
+        alert when the lost alert went out (else a quiet notice). Fail (no turn seen, the wrong direction, moved):
+        identity stays lost, one alert, no new probe at that place for PROBE_BAD_S s. Stopped by no information or
+        another robot, or a child that did not complete its turn (a non-zero exit, a result line marked interrupted or
+        aborted, none at all): no verdict, no alert, the hold goes on (after a child's abort, the next probe not before
+        PROBE_RETRY s); it still counts against `probes`.
         -> True on a pass"""
         self.probes_run += 1; self.probe_cand = None
         signs = random.sample((1.0, -1.0), 2); x0, y0 = c[0], c[1]
         box = f"{x0 - 0.25:.2f},{x0 + 0.25:.2f},{y0 - 0.25:.2f},{y0 + 0.25:.2f}"
         self.log("probe_start", n=self.probes_run, at=[round(x0, 3), round(y0, 3)], signs=signs, rate=self.probe_rate, seconds=self.probe_time)
-        turns = []; why = None; last = c
+        turns = []; why = None; last = c; child = None
         for k, sg in enumerate(signs):
             if k: self.sleep(self.PROBE_GAP)
             q = self.candidate(self.snap())
@@ -1422,6 +1451,9 @@ class Session:
             acc = dict(dth=0.0, th=q[2], last=q, moved=None)
             r = self.run_step(self.probe_step(sg * self.probe_rate, box), watch=self.probe_watch((x0, y0), acc))
             if r.get("stopped") and acc["moved"] is None: why = r["stopped"]; break
+            d = r.get("data") if isinstance(r.get("data"), dict) else {}
+            if acc["moved"] is None and (r.get("rc") != 0 or not d or d.get("interrupted") or d.get("aborted")):
+                why = child = f"the probe child did not complete its turn (rc {r.get('rc')}): {r.get('line') or 'no result line'}"; break
             if acc["moved"] is None:
                 self.sleep(self.PROBE_AFTER); stop = self.probe_watch((x0, y0), acc)()
                 if stop and acc["moved"] is None: why = stop; break
@@ -1429,7 +1461,12 @@ class Session:
             if acc["moved"] is not None: break
         at = f"({x0:+.2f}, {y0:+.2f})"; want = self.probe_rate * self.probe_time
         if why is not None:
-            self.log("probe_stopped", n=self.probes_run, why=why); self.probes_left_alert(); return False
+            self.probe_none += 1; self.probe_none_why = why
+            if child:                                  # the child aborted: no verdict, the next probe not before PROBE_RETRY s
+                self.probe_wait = self.clock() + self.PROBE_RETRY
+                self.log("probe_verdict", n=self.probes_run, ok=None, at=[round(x0, 3), round(y0, 3)], no_verdict=why)
+            else: self.log("probe_stopped", n=self.probes_run, why=why)
+            self.probes_left_alert(); return False
         moved = math.hypot(last[0] - x0, last[1] - y0)
         ok = (len(turns) == 2 and moved < self.PROBE_MOVE and
               all(m is None and self.PROBE_BAND[0] * want <= sg * dth <= self.PROBE_BAND[1] * want for sg, dth, m in turns))
@@ -1437,22 +1474,25 @@ class Session:
                  turns=[dict(sign=sg, turned=round(dth, 3), moved=m) for sg, dth, m in turns], wanted=round(want, 3))
         if ok:
             q = self.snap(); cc = self.candidate(q) or last
+            L = self.ours_lost or {}
             self.ours_lost = None; self.twins_seen = False; self.moves = [m for m in self.moves if m[1] is None]
             self.us_last = dict(x=cc[0], y=cc[1], t=self.clock() - (cc[3] if len(cc) > 3 else 0.0))
             self.log("ours_found", at=[round(cc[0], 3), round(cc[1], 3)], by="probe")
-            self.notice(f"our robot recognised by its turn at ({cc[0]:+.2f}, {cc[1]:+.2f})")
+            self.found_text(L, f"our robot recognised by its turn at ({cc[0]:+.2f}, {cc[1]:+.2f}): the session resumes")
             return True
         self.probe_bad.append((x0, y0, self.clock()))
         msg = (f"the robot seen as {self.team} {self.our_id} at {at} did not follow a commanded turn: it is not ours, "
                f"or ours does not respond; the session holds")
-        if self.probes_run >= self.probes: msg += f" (no identity probe left: {self.probes_run} used)"; self.probes_out_sent = True
+        if self.probes_run >= self.probes: msg += f" (no identity probe left: {self.probes_run} used{self.no_verdict_text()})"; self.probes_out_sent = True
         self.alert(msg, kind="probe_fail", robot=at, force=True)
         return False
     def probes_left_alert(self):
         """once, when the last probe ended without a verdict"""
         if self.probes and self.probes_run >= self.probes and not self.probes_out_sent:
             self.probes_out_sent = True
-            self.alert(f"no identity probe left ({self.probes_run} used): the session holds: {self.lost_tail()}", kind="probes_out", force=True)
+            self.alert(f"no identity probe left ({self.probes_run} used{self.no_verdict_text()}): the session holds: {self.lost_tail()}", kind="probes_out", force=True)
+    def no_verdict_text(self):
+        return f", {self.probe_none} without a verdict, the last: {self.probe_none_why}" if self.probe_none else ""
 
     def our_pos(self, s):
         """our robot's position when it is fresh: ours in the raw view, else the page's; None = not known"""
@@ -1549,10 +1589,27 @@ class Session:
                     f"({', '.join(map(str, self.cameras_given))}): list every camera of the field (--camera-ids)")
         mm = self.mismatch(s)
         if mm: return f"the robot the tools are driving is not ours: {mm}"
+        hd = self.heading_check(s)
+        if hd: return hd
         self.send_now(self.start_text())
         if not str(self.last_send).startswith(("rc 0", "ok")):
             return f"the alert command did not deliver the start alert ({self.last_send}): a person must be alerted (SOLO_NOTIFY_CMD)"
         return None
+    HEADING_TOL = 0.5                   # rad: our robot's heading in the raw view and the page's may differ this much at start
+    def heading_check(self, s):
+        """the start check of the vision's mirror setting: with the positions agreeing, our robot's heading in the raw
+        view and the page's must agree within HEADING_TOL (a wrong --vision-mirror flips the raw view's y and heading:
+        the positions then agree only near y = 0). -> why the session may not start, or None (the check skipped when a
+        heading is missing: logged)"""
+        r = s.get("robot"); c = self.candidate(s)
+        if r is None or len(r) < 3 or r[2] is None or s.get("robot_age", 9) > VISION_FRESH:
+            self.log("heading_check", skipped="the field page gives no fresh heading"); return None
+        if c is None or c[2] is None: self.log("heading_check", skipped="our robot's heading not seen in the raw view"); return None
+        d = abs(wrap(c[2] - r[2]))
+        if d <= self.HEADING_TOL: return None
+        flip = abs(wrap(c[2] + r[2])) <= self.HEADING_TOL
+        return (f"our robot's heading in the raw vision ({c[2]:+.2f} rad) is {d:.2f} rad from the page's ({r[2]:+.2f} rad)"
+                f"{', the same with its sign flipped' if flip else ''}: check --vision-mirror (it must match the connector's mirror setting)")
     def start_text(self):
         """the alert a home session sends in its start check; the session starts only when the alert command exits 0"""
         return (f"session starting: {self.head.get('name') or 'unnamed'}, the {half_name(self.home)} half"
@@ -2728,7 +2785,7 @@ def main():
     our_id = opt("--our-id", os.environ.get("SOLO_OUR_ID") or None); hk["fetch_limit"] = float(opt("--fetch-limit", "1.0"))
     hk.update(info_alert=float(opt("--info-alert", "10")), alert_dead=float(opt("--alert-dead", "300")), switch_after=float(opt("--switch-after", "20")),
               switch_cooldown=float(opt("--switch-cooldown", "60")), max_switches=int(opt("--max-switches", "4")),
-              settle=float(opt("--settle", "1.5")), max_speed=float(opt("--max-speed", "2.0")), reappear=float(opt("--reappear", "0.5")),
+              settle=float(opt("--settle", "1.5")), max_speed=float(opt("--max-speed", "2.0")), reappear=float(opt("--reappear", "0.15")),
               probes=int(opt("--probes", "6")), probe_rate=float(opt("--probe-rate", "1.5")), probe_time=float(opt("--probe-time", "0.7")),
               clear_own=float(opt("--clear-own", "1.5")))
     vg, _, vp = opt("--vision", f"{VISION_GROUP}:{VISION_PORT}").rpartition(":"); viface = opt("--vision-iface", os.environ.get("SOLO_IFACE", "0.0.0.0"))

@@ -74,13 +74,19 @@ def test_a_twin_left_alone_after_our_tag_drops_out_holds_without_clearing_and_sa
     lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
     assert len(starts) == 1 and s.done == [] and not s.not_ours           # nothing ran after the twin came in
     assert lost and "after two robots were seen as ours, the one left is blue 3 at (-0.60, +0.40)" in lost[0]
-    assert lost[0].endswith("; the session holds: put the robot back at (-1.00, +0.00) or restart the session") and s.ours_lost is not None
+    assert lost[0].endswith("; the session holds: put the robot back at (-1.00, +0.00) or restart the session; the session will try to recognise it by a short turn on the spot") and s.ours_lost is not None
 
 def test_which_robot_is_ours_clears_only_when_ours_is_seen_again_at_its_old_place():
     s, run, note, starts = swap_session(back=60, back_at=(-0.6, 0.0))      # one robot, 0.4 m from where ours stood
     assert len(starts) == 1 and s.done == [] and s.ours_lost is not None
     s, run, note, starts = swap_session(back=60)                           # ours at its old place
     assert s.ours_lost is None and len(starts) == 3 and starts[1] >= 60 + 2 * s.clear_s - 0.3 and s.done == [1, 2]
+
+def test_our_robot_seen_again_at_its_place_after_the_lost_alert_is_alerted_with_the_session_resuming():
+    s, run, note, starts = swap_session(back=60)
+    lost = [i for i, m in enumerate(alerts(note)) if m.startswith("which robot is ours was lost")]
+    back = [i for i, m in enumerate(alerts(note)) if m == "our robot seen again at its place (-1.00, +0.00): the session resumes"]
+    assert lost and back and lost[0] < back[0] and s.ours_lost is None and s.done == [1, 2] and not note.quiet
 
 def test_our_robot_seen_continuously_while_a_step_moves_it_is_not_lost():
     script = [dict(match="goto.py", line="arrived: robot at (-0.40, +0.20) after 3.0 s", dur=3.0)]
@@ -133,18 +139,21 @@ def clean_session(speed, drop=None, others=None, react=REACT, decel=DECEL, steps
 PROBES = lambda run: [c for c in run.cmds("characterize.py") if " spin +1.50 0.70 " in c or " spin -1.50 0.70 " in c]
 
 def test_a_dropout_or_a_stop_at_speed_on_a_clean_field_keeps_our_robot_or_proves_it_by_a_turn_and_the_session_goes_on():
-    cases = {"0.3 s at 1.5 m/s": (1.5, (1.0, 0.3), False), "0.45 s at 1.0 m/s": (1.0, (1.0, 0.45), False),
-             "1.0 s at 0.5 m/s": (0.5, (1.0, 1.0), False),            # reappears within 0.5 m: accepted
-             "1.0 s at 1.0 m/s": (1.0, (1.0, 1.0), True)}             # reappears 0.92 m away: lost, then the probe
+    cases = {"0.3 s at 1.5 m/s": (1.5, (1.0, 0.3), None), "0.45 s at 1.0 m/s": (1.0, (1.0, 0.45), None),
+             "0.8 s at 0.4 m/s": (0.4, (1.0, 0.8), "(-1.61, -0.58)"),   # reappears 0.33 m away: lost, then the probe
+             "1.0 s at 0.5 m/s": (0.5, (1.0, 1.0), "(-1.51, -0.42)"),   # 0.42 m away
+             "1.0 s at 1.0 m/s": (1.0, (1.0, 1.0), "(-0.98, +0.43)")}   # 0.92 m away
     for name, (v, drop, probed) in cases.items():
         s, run, note, clk, starts, checks = clean_session(v, drop)
         assert s.ours_lost is None and not s.not_ours and s.done == [1, 2], (name, s.done, run.stops)
         lost = [m for m in alerts(note) if "which robot is ours" in m]
         assert all(d <= lim for d, lim in checks), name
+        found = [m for m in alerts(note) if m.startswith("our robot recognised")]
         if probed:
-            assert len(lost) == 1 and len(PROBES(run)) == 2 and note.quiet == ["our robot recognised by its turn at (-0.98, +0.43)"], name
-        else: assert not lost and not PROBES(run) and not note.quiet, name
-        if drop[1] >= 1.0:                                  # longer than the raw view keeps a detection: stopped, then repeated
+            assert len(lost) == 1 and len(PROBES(run)) == 2 and not note.quiet, name
+            assert found == [f"our robot recognised by its turn at {probed}: the session resumes"], name
+        else: assert not lost and not PROBES(run) and not note.quiet and not found, name
+        if drop[1] > A.VISION_FRESH:                        # longer than the raw view keeps a detection: stopped, then repeated
             assert run.stops and run.stops[0][1].startswith("no information: our robot (blue 3) not seen") and len(run.cmds("goto.py")) == 2, name
         else: assert run.stops == [] and len(starts) == 2, name
 
@@ -183,7 +192,7 @@ def test_a_3_s_dropout_during_a_strategy_step_ends_with_our_robot_proved_by_its_
     assert s.ours_lost is None and not s.not_ours and 2 in s.done
     lost = [m for m in alerts(note) if "which robot is ours" in m]          # reappeared 0.6 m away: proved by its turn
     assert len(lost) == 1 and "ours unseen for 3.2 s" in lost[0] and len(PROBES(run)) == 2
-    assert note.quiet and note.quiet[0].startswith("our robot recognised by its turn at (-1.60, +0.40)")
+    assert not note.quiet and "our robot recognised by its turn at (-1.60, +0.40): the session resumes" in alerts(note)
 
 def test_our_robot_standing_its_tag_dropping_out_and_a_robot_of_our_colour_and_id_seen_0_4_m_away_is_lost():
     D = {}
@@ -195,7 +204,7 @@ def test_our_robot_standing_its_tag_dropping_out_and_a_robot_of_our_colour_and_i
     D["t0"] = clk.t; s.run()
     lost = [m for m in alerts(note) if m.startswith("which robot is ours was lost")]
     assert s.ours_lost is not None and s.done == [] and lost and "0.40 m from where ours last stood" in lost[0]
-    assert lost[0].endswith("put the robot back at (-1.00, +0.00) or restart the session")
+    assert lost[0].endswith("put the robot back at (-1.00, +0.00) or restart the session; the session will try to recognise it by a short turn on the spot")
 
 def test_our_robot_carried_1_m_away_while_the_session_holds_is_lost():
     D = {}
@@ -282,7 +291,8 @@ def test_which_robot_is_ours_lost_while_our_robot_waits_outside_is_alerted_at_on
     s.drive_home(s.look(), "return_home")
     lost = [(t, m) for t, m in rec if m.startswith("which robot is ours was lost")]
     assert lost and 30 <= lost[0][0] <= 30.6 and lost[0][1].endswith(
-        "; our robot at (+0.50, +0.00), outside our half: the session waits; put the robot back at (+0.50, +0.00) or restart the session")
+        "; our robot at (+0.50, +0.00), outside our half: the session waits; put the robot back at (+0.50, +0.00) or restart the session"
+        "; the session will try to recognise it by a short turn on the spot")
 
 def test_session_ended_says_it_ended_holding_since_when_for_what_and_where_our_robot_stands():
     s, run, note, world, clk = make_cams([SPIN()], lambda t: {0: [OUT, ("yellow", 2, -1.8, 1.0)]}, robot=(0.5, 0.0, 0.0), budget=60, switch_after=0)
@@ -457,6 +467,27 @@ def test_a_confirmed_robot_missing_one_frame_stays_confirmed():
     assert all(ids == [("yellow", 2)] for k, ids in out if k >= 11)
     out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.5, 0.0)] if 10 <= k < 20 or k >= 45 else []))   # 0.42 s gap: still kept
     assert all(ids == [("yellow", 2)] for k, ids in out if k >= 11)
+
+def test_a_robot_detected_only_now_and_then_is_counted_from_its_second_sighting():
+    for every in (20, 50):                                    # 0.33 s and 0.82 s between its detections
+        out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -0.5 + 0.002 * k, 0.0)] if k >= 10 and (k - 10) % every == 0 else []), n=150)
+        assert [k for k, ids in out if ids][0] == 10 + every, every
+
+def test_two_unrelated_single_detections_2_m_apart_within_1_s_are_not_counted():
+    for gap in (18, 30, 48):                                  # 0.3, 0.5 and 0.8 s apart
+        out = flicker_view(lambda k: [OURS] + ([("yellow", 2, -2.0, -1.0)] if k == 30 else [("yellow", 2, 0.0, -1.0)] if k == 30 + gap else []))
+        assert all(ids == [] for k, ids in out), gap
+
+def test_a_robot_detected_only_now_and_then_inside_our_half_stops_a_step():
+    for every in (20, 50):
+        T = {}
+        def frames(t, every=every):
+            k = round((t - T.get("at", 1e18)) * 60)
+            return {0: [OURS] + ([("yellow", 2, -0.5, 0.0)] if k >= 0 and k % every == 0 else [])}
+        s, run, note, world, clk = make_cams([SPIN(label="spin")], frames, budget=60, switch_after=0)
+        T["at"] = clk.t + 1.0; s.run()
+        assert run.stops and run.stops[0][1].startswith("another robot: yellow2"), every
+        assert every / 60 - 0.02 <= run.stops[0][0] - T["at"] <= every / 60 + 0.2, every
 
 def test_a_robot_seen_in_every_other_frame_stops_a_step():
     T = {}
