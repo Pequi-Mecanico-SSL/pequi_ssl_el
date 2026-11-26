@@ -3,7 +3,8 @@
 --out defaults to $SOLO_DATA/raw (SOLO_DATA default: log/solo in this repository; created if missing).
 --robot: run ON the robot (nothing crosses the Wi-Fi): its topics without /solo/debug, flushed every 2 s (power cuts).
 --laptop: only what the laptop publishes itself (/cmd_vel, /solo/debug), the companion of a recorder on the robot.
-Lines: {"t": unix, "topic": ..., ...fields}. wheels/state: velocity rad/s, effort = Iq A, position rad."""
+Lines: {"t": unix, "topic": ..., ...fields}. wheels/state: velocity rad/s, effort = Iq A, position rad.
+imu: all three accelerations and rates (az shows the robot being lifted or set down, ax/ay a tilt while it is carried)."""
 import gzip, json, os, sys, time
 import rclpy
 from rclpy.node import Node
@@ -28,7 +29,7 @@ if not ON_LAPTOP:
   n.create_subscription(Twist, '/cmd_vel_corrected', lambda m: w('cmd_vel_corrected', **tw(m)), BE)
   n.create_subscription(Float32MultiArray, '/wheels/cmd', lambda m: w('wheels_cmd', v=r4(m.data)), BE)
   n.create_subscription(JointState, '/wheels/state', lambda m: w('wheels_state', vel=r4(m.velocity), iq=r4(m.effort), pos=r4(m.position)), BE)
-  n.create_subscription(Imu, '/imu', lambda m: w('imu', gz=round(m.angular_velocity.z, 4), ax=round(m.linear_acceleration.x, 3), ay=round(m.linear_acceleration.y, 3)), BE)
+  n.create_subscription(Imu, '/imu', lambda m: w('imu', gz=round(m.angular_velocity.z, 4), ax=round(m.linear_acceleration.x, 3), ay=round(m.linear_acceleration.y, 3), az=round(m.linear_acceleration.z, 3), gx=round(m.angular_velocity.x, 4), gy=round(m.angular_velocity.y, 4)), BE)
 if not ON_ROBOT:
   n.create_subscription(String, '/solo/debug', lambda m: w('solo_debug', d=json.loads(m.data)), BE)
 t = tp = time.time()
