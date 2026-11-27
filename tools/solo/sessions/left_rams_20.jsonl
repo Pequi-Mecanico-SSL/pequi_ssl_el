@@ -1,0 +1,51 @@
+# About 15 minutes in the left half of a shared field (x < 0): 20 straight rams, the release direction and speed at
+# 1.5 and 1.0 m/s. Lane R of left_ball_slot_10.jsonl (x -0.9, aimed 5 deg off the y axis toward -x, at a touch-line
+# wall); the robot places its own ball (rough mode). Pairs alternate -y / +y so the next placement is short; a 1.5
+# pair, then a 1.0 pair, five times, so a session cut by the budget still has both speeds.
+# Run: python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_rams_20.jsonl --budget 15 --our-id N --camera-ids 0,1,...  (every camera of the field; SOLO_NOTIFY_CMD set: the start alert must go out)
+# Report: python3 -I tools/solo/rams_report.py $SOLO_DATA/sessions/logs
+{"kind": "session", "name": "left_rams_20", "budget_min": 15, "home": "-2.2,-0.10,-1.45,1.45", "park": [-0.85, 0.0], "vars": {"OUT": "${SOLO_DATA}/sessions"}, "env": {"SOLO_BOX": "-2.2,-0.10,-1.45,1.45", "SOLO_BRAKE": "auto", "SOLO_BRAKE_FIRST": "1.2"}}
+{"kind": "marker", "label": "start marker", "text": "left-half rams: start (auto_session)", "data": "use"}
+{"kind": "strategy", "label": "strategy off (it was started with run_real.sh)", "on": false}
+{"kind": "place", "label": "ball for ram 1.5 toward -y (1)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_0a"}
+{"kind": "test", "label": "ram 1.5 toward -y (1)", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15_0a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward +y (1)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_0b"}
+{"kind": "test", "label": "ram 1.5 toward +y (1)", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15_0b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward -y (1)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_0a"}
+{"kind": "test", "label": "ram 1.0 toward -y (1)", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10_0a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward +y (1)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_0b"}
+{"kind": "test", "label": "ram 1.0 toward +y (1)", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10_0b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward -y (2)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_1a"}
+{"kind": "test", "label": "ram 1.5 toward -y (2)", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15_1a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward +y (2)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_1b"}
+{"kind": "test", "label": "ram 1.5 toward +y (2)", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15_1b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward -y (2)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_1a"}
+{"kind": "test", "label": "ram 1.0 toward -y (2)", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10_1a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward +y (2)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_1b"}
+{"kind": "test", "label": "ram 1.0 toward +y (2)", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10_1b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward -y (3)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_2a"}
+{"kind": "test", "label": "ram 1.5 toward -y (3)", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15_2a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward +y (3)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_2b"}
+{"kind": "test", "label": "ram 1.5 toward +y (3)", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15_2b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward -y (3)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_2a"}
+{"kind": "test", "label": "ram 1.0 toward -y (3)", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10_2a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward +y (3)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_2b"}
+{"kind": "test", "label": "ram 1.0 toward +y (3)", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10_2b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward -y (4)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_3a"}
+{"kind": "test", "label": "ram 1.5 toward -y (4)", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15_3a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward +y (4)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_3b"}
+{"kind": "test", "label": "ram 1.5 toward +y (4)", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15_3b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward -y (4)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_3a"}
+{"kind": "test", "label": "ram 1.0 toward -y (4)", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10_3a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward +y (4)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_3b"}
+{"kind": "test", "label": "ram 1.0 toward +y (4)", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10_3b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward -y (5)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_4a"}
+{"kind": "test", "label": "ram 1.5 toward -y (5)", "test": "ram", "args": [1.5, -95, 0.9, 0.2], "needs_ball": true, "group": "r15_4a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.5 toward +y (5)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r15_4b"}
+{"kind": "test", "label": "ram 1.5 toward +y (5)", "test": "ram", "args": [1.5, 95, 0.9, 0.2], "needs_ball": true, "group": "r15_4b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward -y (5)", "x": -0.9, "y": -0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_4a"}
+{"kind": "test", "label": "ram 1.0 toward -y (5)", "test": "ram", "args": [1.0, -95, 0.6, 0.2], "needs_ball": true, "group": "r10_4a", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "place", "label": "ball for ram 1.0 toward +y (5)", "x": -0.9, "y": 0.3, "opts": ["--tol", "0.15"], "env": {"SOLO_BOX": "-2.43,-0.10,-1.68,1.68"}, "group": "r10_4b"}
+{"kind": "test", "label": "ram 1.0 toward +y (5)", "test": "ram", "args": [1.0, 95, 0.6, 0.2], "needs_ball": true, "group": "r10_4b", "env": {"SOLO_RAMP": "1.7", "SOLO_BOX": "-1.45,-0.40,-1.30,1.30"}, "out": "${OUT}/logs", "tee": "${OUT}/rams.log"}
+{"kind": "marker", "label": "end marker", "text": "left-half rams: end (auto_session)", "data": "skip", "final": true}
+{"kind": "cmd", "label": "save the robot log", "argv": ["${T}/robot_stack.sh", "save"], "final": true, "timeout": 90}
