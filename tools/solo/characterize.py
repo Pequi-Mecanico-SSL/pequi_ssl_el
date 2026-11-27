@@ -9,6 +9,11 @@ tests:  step fwd|side <speed m/s> [x0 y0 dir_deg length]
                                       from `runup` m behind the ball (0.75), straight through it along dir_deg, command
                                       off `past` m beyond the ball's spot (0.25)
         goto x y th_deg
+        fspin <speed m/s> <dir_deg> <rate rad/s> <latency s> [x0 y0 seconds]
+                                      a field-frame move along dir_deg while spinning at rate, the field velocity
+                                      turned into the body frame as solo_node does (th_cmd = vision heading +
+                                      last_w * latency), 30 Hz; from (x0, y0) (default -1.3, LANE) for `seconds` (2.5)
+                                      or until the box brake; ramped by SOLO_RAMP (fspin_runs.sh runs a latency series)
         sweep x0 x1 y0 y1 rows [speed]
                                       rows along x from y0 to y1 (a coverage pass; 0.5 m/s)
 Every test logs t, pose, ball and command to a CSV in --out (default $SOLO_DATA/logs; SOLO_DATA
@@ -245,6 +250,34 @@ elif test == "spin":
     res.update(cmd_rate=w, steady_rate=round(wss, 2), ratio=round(wss / abs(w), 3), delay_to_10pct_ms=round((t10 - ts) * 1000),
                ang_accel_10_90=round(0.8 * wss / (t90 - t10), 1) if t90 > t10 else None,
                centre_drift_m=round(math.hypot(p1[0] - p0[0], p1[1] - p0[1]), 3))
+elif test == "fspin":                        # fspin v dir_deg w latency [x0 y0 T]
+    sp, dirn, w, lat = float(rest[0]), math.radians(float(rest[1])), float(rest[2]), float(rest[3])
+    x0, y0, T = (float(v) for v in rest[4:7]) if len(rest) >= 7 else (-1.3, LANE, 2.5)
+    ux, uy = math.cos(dirn), math.sin(dirn)
+    goto(x0, y0, dirn)
+    for _ in range(25): send(0, 0, 0); tick()
+    p0 = pose[0]; last_w = 0.0; nxt = 0.0; early = [False]
+    ts = now()
+    while now() - ts < T:
+        tick(0.005)
+        if must_brake(): early[0] = True; break
+        if now() < nxt: continue
+        nxt = now() + 1.0 / 30.0
+        k = min(1.0, RAMP * (now() - ts) / sp) if RAMP > 0 and sp > 1e-6 else 1.0
+        vfx, vfy = k * sp * ux, k * sp * uy
+        if now() - pose[1] > 0.2: send(0, 0, 0); last_w = 0.0; continue     # no fresh pose: stand still
+        thp = pose[0][2] + last_w * lat
+        c, s = math.cos(thp), math.sin(thp)
+        send(c * vfx + s * vfy, -s * vfx + c * vfy, w); last_w = w
+    te = now()
+    while now() - te < SETTLE:
+        send(0, 0, 0); tick()
+    p1 = pose[0]
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    res.update(cmd_speed=sp, dir_deg=round(math.degrees(dirn), 1), rate=w, latency=lat, run_time=round(te - ts, 2),
+               braked_early=early[0], start=[round(p0[0], 3), round(p0[1], 3)], end=[round(p1[0], 3), round(p1[1], 3)],
+               along=round(dx * ux + dy * uy, 3), side=round(-dx * uy + dy * ux, 3),
+               t_cmd_on=round(ts, 3), t_cmd_off=round(te, 3))
 elif test == "ram":
     sp = float(rest[0]); ang = math.radians(float(rest[1])) if len(rest) > 1 else 0.0     # ram direction in the field frame
     runup = float(rest[2]) if len(rest) > 2 else 0.75; past = float(rest[3]) if len(rest) > 3 else 0.25

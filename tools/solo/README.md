@@ -176,3 +176,17 @@ check of the strategy node's saved command line before the field page or a sessi
 drives the robot about 0.3 m.
 
 Tests (no ROS, no robot, no network): `uv run --with pytest --with numpy pytest -q tools/solo/tests/`.
+
+## Short field checks of the motion controller (latency, stops, rams)
+
+Three checks that each end in one printed `DECIDE:` line, all in the -x half of the field:
+
+| check | command | report |
+|---|---|---|
+| the strategy's `latency` (about 1 min, no ball) | `tools/solo/fspin_runs.sh <team> [OUT]` (six `characterize.py fspin` moves: 0.8 m/s field-frame while spinning at 3 rad/s, latency 0.1 / 0.04 / 0; `SHORT=1`: two) | printed at the end: `DECIDE: set latency to X` -> `-p latency:=X` for `solo_node` / `duo_node` |
+| stops and top speed (about 2.5 min, no ball) | `SOLO_BOX= SOLO_RAMP=1.7 python3 tools/solo/series.py <team> tools/solo/sessions/plans/left_A_ramped.jsonl --out OUT --results OUT/results.jsonl --max 8` | `python3 -I tools/solo/steps_report.py OUT`: keep `speed_cap` 1.5 or a lower one |
+| straight rams at 1.5 and 1.0 m/s (about 15 min) | `python3 tools/solo/auto_session.py <team> tools/solo/sessions/left_rams_20.jsonl --budget 15 --our-id N --camera-ids ...` | `python3 -I tools/solo/rams_report.py $SOLO_DATA/sessions/logs`: exit direction vs heading, ball speed vs robot speed |
+
+`fspin_runs.sh` refuses to start while another commanding program runs (`procs.py`). Offline check:
+`FSPIN_ROS=1 python3 -m pytest tools/solo/tests/test_reports.py` (with ROS sourced and `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`)
+drives `fspin_runs.sh` against `tests/fake_field.py` on a loopback-only ROS domain.

@@ -386,7 +386,7 @@ def test_mirrored_step_round_trip_and_side(tmp_path):
     assert A.mirror_step(m)["args"] == [1.2, -95.0, 0.7, 0.2]
 
 def test_every_shipped_left_session_mirrors_into_the_right_half_and_passes_the_load_check(tmp_path):
-    for f in ("left_noball.jsonl", "left_noball_20.jsonl", "left_ball_slot_10.jsonl"):
+    for f in ("left_noball.jsonl", "left_noball_20.jsonl", "left_ball_slot_10.jsonl", "left_rams_20.jsonl"):
         head, steps, vs = A.load_session(os.path.join(SESS, f), "blue", dict(OUT=str(tmp_path)))
         mh = A.mirror_head(head); ms = [A.mirror_step(st, str(tmp_path / "mirrored"), vs) for st in steps]
         s = A.Session("blue", ms, head=mh, vs=vs, echo=False, home=A.home_rect(mh["home"]), our_id=0)
