@@ -192,7 +192,7 @@ def test_real_server_live_set():
         t1 = time.perf_counter(); r = tick(2.0, 0.6); first = (time.perf_counter() - t1) * 1000
         assert r["cautious"] and first < 100 and any(abs(x) > 1e-6 for v in r["v"] for x in v)
         assert ask({"cfg": "get"})["compiles"] == c0
-        for bad in (float("nan"), float("inf"), "x", True):
+        for bad in (float("nan"), float("inf"), 1e39, "x", True):
             r = ask({"cfg": "set", "set": {"a_nfv": bad}})
             assert "error" in r and r["now"]["a_nfv"] == 0.2
         assert "error" in ask({"cfg": "set", "set": {"d_role": 0}})

@@ -236,7 +236,7 @@ def finite(v):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     v = float(v)
-    return v if np.isfinite(v) else None
+    return v if np.isfinite(v) and abs(v) < 3.4e38 else None              # finite as float32 too (1e39 is not)
 
 
 def g7(x):
@@ -349,6 +349,7 @@ while True:
         q = json.loads(data)
         if isinstance(q, dict) and "cfg" in q:                  # the live settings: no robot command in the reply
             out = cfg_request(q)
+            out["ms"] = round((time.perf_counter() - t1) * 1000, 2)
             if "seq" in q:
                 out["seq"] = q["seq"]
             sock.sendto(json.dumps(out).encode(), addr)
