@@ -55,8 +55,6 @@ services:
     environment:
       # I2C bus of the IMU: 1 on the Raspberry Pi 4, 0 on the Orange Pi 4 Pro (set in .env)
       - IMU_I2C_BUS=${IMU_I2C_BUS:-1}
-      # robot model, a file of src/robot_control/config (set in .env): four_wheel or three_wheel
-      - ROBOT_CONFIG=${ROBOT_CONFIG:-four_wheel}
   
   simulator:
     container_name: ssl_simulator
