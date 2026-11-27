@@ -16,6 +16,19 @@ the team's slot order (duo_nk: slot 0 the keeper, slot 1 the field robot); the r
 and gets zero; in a stop no robot's target is nearer the ball than --stop-keep m (0.7), and each robot keeps --own-gap m
 (0.35) from the other (centres) as well as 0.6 m from the ball. In BALL_PLACEMENT a request may carry "place": [x, y]
 (the placement spot, attack frame): then the whole line from the ball to the spot is kept off as the ball is.
+Parameters live (no restart, no recompile): a request {"cfg": "get"}, {"cfg": "set", "set": {key: number, ...}} or
+{"cfg": "profile"} (every key back to the start value; "keys": [...] for some only) is answered with the bot's
+parameters now in force, never with a robot command, and leaves the strategy's memory as it is. Every parameter is
+a traced float32 scalar of the compiled program, so a new value takes effect on the next tick with no recompile (the
+reply's "compiles" counts the program's compiled variants: it does not change). A set is refused whole ("error",
+nothing changed) unless every key is a parameter of the bot (not d_role: one robot or the team is fixed at start)
+and every value a finite number. The values in force
+last as long as this process: a node restart or a request's reset keeps them; a new start of the server is back to
+--params. Reply: {"bot", "profile": the --params keys at their start values, "now": the same keys and every changed
+one at the values in force, "changed": [keys], "default": the bot's own value of each changed key not in --params,
+"report": the strategy's per-robot-batch scalars of its memory now (duo_att: vo_m their fastest speed seen in play,
+mode 0 cautious / 1 free / 2 pick, ...), "keys": every parameter name, "compiles", "error" when refused}. Each
+accepted change is printed to the log with the clock time.
 States are sslrules.GameState values. The policy acts in RUNNING / FREE_KICK / KICKOFF / PENALTY; in STOP the robot
 goes to the team's restart pose (at --stop-speed at most) and keeps 0.6 m from the ball; in every other state it stands still."""
 import argparse
@@ -58,6 +71,8 @@ P = {**mod.PARAMS, **{k: jnp.float32(v) for k, v in json.loads(args.params).item
 unknown = [k for k in json.loads(args.params) if k not in mod.PARAMS]
 if unknown:
     raise SystemExit(f"unknown params: {unknown}")
+PROFILE = {k: float(v) for k, v in json.loads(args.params).items()}   # the start values, for the live settings
+P0 = dict(P)                                                            # the start values of every key
 
 
 def make_av(q):
@@ -211,6 +226,75 @@ if missing:
 def reset_mem(mem):
     """the start memory, with the --keep keys carried over from mem"""
     return {**mem0, **{k: mem[k] for k in KEEP}} if KEEP else mem0
+
+
+FIXED = {"d_role"}           # what the server plays (one robot or the team) is set at start: run_duo.sh checks it there
+
+
+def finite(v):
+    """a finite JSON number (not a bool, not a string) as float, else None"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    v = float(v)
+    return v if np.isfinite(v) else None
+
+
+def g7(x):
+    """a float32 value as the short decimal it was given as (0.35, not 0.3499999940395355)"""
+    return float(f"{float(x):.7g}")
+
+
+def cfg_view(error=None):
+    """the reply to a cfg request: the parameters in force, the profile, the strategy's memory report"""
+    changed = sorted(k for k in P if float(P[k]) != float(P0[k]))
+    rep = {}
+    if isinstance(mem, dict):
+        for k, v in mem.items():                                   # the per-batch scalars (shape (1,)): the bot's state
+            if hasattr(v, "shape") and tuple(v.shape) == (1,):
+                rep[k] = round(float(v[0]), 3)
+    out = dict(bot=args.bot, profile=PROFILE, now={k: g7(P[k]) for k in sorted(set(PROFILE) | set(changed))},
+               changed=changed, default={k: g7(mod.PARAMS[k]) for k in changed if k not in PROFILE}, report=rep,
+               keys=sorted(P), compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team)))
+    if error:
+        out["error"] = error
+    return out
+
+
+def cfg_request(q):
+    """a cfg request ("get", "set", "profile"): checks it whole, changes P only when it is all valid"""
+    global P
+    op = q.get("cfg")
+    if op == "get":
+        return cfg_view()
+    if op == "set":
+        new = q.get("set")
+        if not isinstance(new, dict) or not new:
+            return cfg_view("set needs {key: number, ...}")
+        bad = [k for k in new if k not in P]
+        if bad:
+            return cfg_view(f"not parameters of {args.bot}: {sorted(map(str, bad))}")
+        bad = [k for k in new if k in FIXED]
+        if bad:
+            return cfg_view(f"fixed while the server runs (start it again to change): {sorted(bad)}")
+        vals = {k: finite(v) for k, v in new.items()}
+        bad = [k for k, v in vals.items() if v is None]
+        if bad:
+            return cfg_view(f"not finite numbers: {sorted(bad)}")
+        upd = vals
+    elif op == "profile":
+        keys = q.get("keys", list(P))
+        if not isinstance(keys, list) or any(k not in P for k in keys):
+            return cfg_view("profile: keys must be a list of parameters")
+        upd = {k: float(P0[k]) for k in keys}
+    else:
+        return cfg_view(f"unknown cfg request {op!r} (get, set, profile)")
+    was = {k: g7(P[k]) for k in upd}
+    P = {**P, **{k: jnp.float32(v) for k, v in upd.items()}}           # float32 scalars, as compiled: no recompile
+    diff = [f"{k} {was[k]:g} -> {g7(P[k]):g}" for k in sorted(upd) if was[k] != g7(P[k])]
+    print(time.strftime("%H:%M:%S") + " params " + (", ".join(diff) if diff else "unchanged") + f" ({op})", flush=True)
+    return cfg_view()
+
+
 ACTS = (int(GS.RUNNING), int(GS.FREE_KICK), int(GS.KICKOFF), int(GS.PENALTY))
 STOPS = (int(GS.STOP), int(GS.BALL_PLACEMENT))
 
@@ -263,6 +347,12 @@ while True:
     q = None
     try:
         q = json.loads(data)
+        if isinstance(q, dict) and "cfg" in q:                  # the live settings: no robot command in the reply
+            out = cfg_request(q)
+            if "seq" in q:
+                out["seq"] = q["seq"]
+            sock.sendto(json.dumps(out).encode(), addr)
+            continue
         if q.get("reset"):
             mem = reset_mem(mem)
         out, mem = (step_team if is_team(q) else step)(q, mem)
