@@ -24,4 +24,11 @@ drive:
     inertia: 0.0062
     roller_friction: [1.17, 1.16, 1.41]
     rolling_current: [0.30, 0.33, 0.26]
-    current_limit_a: 3.0
+    # fitted on the field carpet with the camera (2026-11-27). The wheels creep well before they let go:
+    # this grip lets the front wheels run up to 0.4 m/s ahead of the ground accelerating forward
+    efficiency: 0.76
+    grip: 1.0
+    com: [-0.010, 0.0]
+    com_height: 0.05
+    # ESC limit = this x 1.25 = the 5 A of can_bridge
+    current_limit_a: 4.0

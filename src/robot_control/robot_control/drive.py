@@ -65,15 +65,21 @@ class Drive(Node):
         d('motor_kt', 0.0347)
         d('roller_friction', 0.0, any_type)
         d('rolling_current', 0.0, any_type)
+        d('efficiency', 1.0)            # share of the accelerating force that reaches the body
+        # grip: friction coefficient wheel / floor (0 = not limited), centre of mass (x, y, height)
+        d('grip', 0.0)
+        d('com', [0.0, 0.0])
+        d('com_height', 0.0)
         d('feedforward', True)
         # limits
         d('current_limit_a', 3.0)       # motor current the reference plans with
         d('current_headroom', 1.25)     # ESC Iq limit over it: room for the wheel loops' corrections
+        d('continuous_a', 3.0)          # what an ESC that lowered its limit (windings warm) still gives
         d('max_accel', 5.0)             # m/s^2
-        d('max_ang_accel', 60.0)        # rad/s^2
+        d('max_ang_accel', 120.0)       # rad/s^2
         d('max_wheel_rad_s', 80.0)
         # how far the reference may run ahead of the measured velocity
-        d('max_lead', 0.15)             # m/s
+        d('max_lead', 0.3)              # m/s
         d('max_lead_yaw', 1.5)          # rad/s
         # heading: gain (1/s) on the difference between the expected and the gyro's turn angle;
         # expected = the commanded yaw rate as the robot answers it (setpoint delay, then this lag)
@@ -81,7 +87,7 @@ class Drive(Node):
         d('heading_max_error', 0.2)     # rad
         d('yaw_response_s', 0.04)
         # the wheels realise a translation this long after its setpoint: while turning, setpoints are aimed ahead by it
-        d('response_s', 0.04)
+        d('response_s', 0.005)
         # the wheels answer a current this long after it is commanded: speed setpoints are held back by it
         d('setpoint_delay_s', 0.03)
         # ESC parameters pushed at start and when an ESC reboots, "name=value" (names of esc_bus.PARAMS)
@@ -92,11 +98,13 @@ class Drive(Node):
         self.dt = 1.0 / float(p('rate_hz'))
         self.cmd_timeout = float(p('cmd_timeout_s'))
         self.model = Model(p('wheel_angles_deg'), p('robot_radius'), p('wheel_radius'), p('oblique_loss'), p('creep'),
-                           p('mass'), p('inertia'), p('motor_kt'), p('roller_friction'), p('rolling_current'))
+                           p('mass'), p('inertia'), p('motor_kt'), p('roller_friction'), p('rolling_current'),
+                           p('grip'), p('com'), p('com_height'), p('efficiency'))
         self.n = self.model.n
         self.current_limit = float(p('current_limit_a'))
         self.use_ff = bool(p('feedforward'))
         self.esc_limit = self.current_limit * float(p('current_headroom'))
+        self.warm_limit = min(self.current_limit, float(p('continuous_a')) / float(p('current_headroom')))
         self.ref = Reference(self.model, self.current_limit,
                              p('max_accel'), p('max_ang_accel'), p('max_wheel_rad_s'),
                              p('max_lead'), p('max_lead_yaw'))
@@ -317,6 +325,8 @@ class Drive(Node):
             self.setpoint = self.wheel_cmd.copy()
             self.ff[:] = 0.0
         else:
+            warm = any(f[0] & esc_bus.FLAG_LIMITED for f in self.flags.values())
+            self.ref.budget = self.warm_limit if warm else self.current_limit
             v, acc = self.ref.step(target, dt, self.yaw_rate, self.vel if wheels_ok else None)
             self.ref_history.append(v.copy())
             delayed = self.ref_history[0]

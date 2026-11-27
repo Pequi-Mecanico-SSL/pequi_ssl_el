@@ -15,7 +15,12 @@ when braking. Both terms are zero on a hard floor.
 Dynamics, as motor currents: the rollers resist turning with a constant force
 along each wheel's axis (roller_friction, N), each wheel takes a constant
 current to keep rolling (rolling_current, A), and the rest accelerates the
-body (mass, inertia).
+body (mass, inertia). Of the force that accelerates a translation only the
+share efficiency arrives: the carpet takes the rest under load.
+
+Grip: a wheel puts on the ground at most grip x its load; the load is the
+static one (centre of mass at com) shifted by the body's acceleration acting at
+com_height. Accelerating towards a wheel takes load off it.
 """
 import math
 
@@ -27,12 +32,12 @@ def soft_sign(x, x0):
 
 
 def feasible_scale(base, delta, limit):
-    """Largest s in [0, 1] keeping |base + s * delta| <= limit on every entry; 0 when there is none."""
+    """Largest s in [0, 1] keeping |base + s * delta| <= limit (one per entry) on every entry; 0 when there is none."""
     lo, hi = 0.0, 1.0
-    for b, d in zip(base, delta):
+    for b, d, lim in zip(base, delta, limit):
         if abs(d) < 1e-9:
             continue
-        s1, s2 = (-limit - b) / d, (limit - b) / d
+        s1, s2 = (-lim - b) / d, (lim - b) / d
         if s1 > s2:
             s1, s2 = s2, s1
         lo, hi = max(lo, s1), min(hi, s2)
@@ -44,7 +49,8 @@ class Model:
     ROLL_SPEED = 1.0     # rad/s, same for the rolling current
 
     def __init__(self, wheel_angles_deg, robot_radius, wheel_radius, oblique_loss=0.0, creep=0.0,
-                 mass=2.0, inertia=0.008, motor_kt=0.0347, roller_friction=0.0, rolling_current=0.0):
+                 mass=2.0, inertia=0.008, motor_kt=0.0347, roller_friction=0.0, rolling_current=0.0,
+                 grip=0.0, com=(0.0, 0.0), com_height=0.0, efficiency=1.0):
         a = np.radians(np.asarray(wheel_angles_deg, float))
         self.n = len(a)
         per_wheel = lambda v: np.full(self.n, float(v)) if np.isscalar(v) else np.asarray(v, float)
@@ -61,7 +67,14 @@ class Model:
         self.rolling_current = per_wheel(rolling_current)
         # motor currents for a body wrench (Fx, Fy, torque)
         self.wrench_map = np.linalg.pinv(self.J.T) * (self.r / motor_kt)[:, None]
-        self.accel_map = self.wrench_map * np.array([mass, mass, inertia])
+        self.accel_map = self.wrench_map * np.array([mass / efficiency, mass / efficiency, inertia])
+        # wheel loads (N): static, and what each m/s^2 of body acceleration moves between the wheels
+        pos = np.c_[np.cos(a), np.sin(a)] * per_wheel(robot_radius)[:, None]
+        balance = np.linalg.pinv(np.vstack([np.ones(self.n), pos.T]))
+        weight = mass * 9.81
+        self.load = balance @ (weight, weight * com[0], weight * com[1])
+        self.load_shift = -balance[:, 1:] * (mass * com_height)
+        self.grip_current = float(grip) * self.r / motor_kt       # A per N of load; 0 = no grip limit
 
     def _slip_factor(self, v, current):
         """Wheel surface speed over contact-point speed, per wheel, at body velocity v."""
@@ -93,6 +106,13 @@ class Model:
             factor = self._slip_factor(v, current)[2]
         return v
 
+    def grip_currents(self, accel):
+        """Motor current (A) each wheel can put on the ground while the body accelerates (ax, ay)."""
+        if not self.grip_current.any():
+            return np.full(self.n, np.inf)
+        load = np.maximum(self.load + self.load_shift @ np.asarray(accel, float)[:2], 0.0)
+        return self.grip_current * load + self.rolling_current
+
     def friction_currents(self, v):
         """Motor currents (A) that hold the body velocity v against friction."""
         v = np.asarray(v, float)
@@ -108,8 +128,9 @@ class Reference:
 
     Each step moves the reference towards the target with the largest
     acceleration that keeps every motor's predicted current (friction +
-    acceleration) inside current_budget: the wheels stay out of saturation, so
-    the motion keeps its direction. Yaw acceleration is served first.
+    acceleration) inside current_budget and inside what the wheel can put on
+    the ground: the wheels neither saturate nor spin, so the motion keeps its
+    direction. Yaw acceleration is served first.
     Between steps the reference is constant over the ground, not in the turning robot frame.
     The reference never runs more than max_lead ahead of the measured velocity:
     where the robot accelerates less than the model says, it waits.
@@ -123,12 +144,12 @@ class Reference:
         self.max_wheel = float(max_wheel_speed)
         self.max_lead = float(max_lead)
         self.max_lead_yaw = float(max_lead_yaw)
-        self.v = np.zeros(3)
-        self.current = np.zeros(model.n)     # predicted motor currents of the last step
+        self.reset()
 
     def reset(self):
         self.v = np.zeros(3)
-        self.current = np.zeros(self.model.n)
+        self.acc = np.zeros(3)                    # acceleration granted in the last step
+        self.current = np.zeros(self.model.n)     # predicted motor currents of the last step
 
     def step(self, target, dt, yaw_rate=None, measured=None):
         m = self.model
@@ -151,12 +172,17 @@ class Reference:
 
         # friction where the step is heading: already there when starting from rest
         friction = m.friction_currents(v + (dv[0], dv[1], dw))
-        i_w = m.accel_map[:, 2] * (dw / dt)
-        dw *= feasible_scale(friction, i_w, self.budget)
-        base = friction + m.accel_map[:, 2] * (dw / dt)
-        dv = dv * feasible_scale(base, m.accel_map[:, :2] @ (dv / dt), self.budget)
+        want_w, want_v = dw, dv
+        acc_xy = self.acc[:2]
+        for _ in range(3):      # the grip depends on the acceleration it allows
+            limit = np.minimum(self.budget, m.grip_currents(acc_xy))
+            dw = want_w * feasible_scale(friction, m.accel_map[:, 2] * (want_w / dt), limit)
+            base = friction + m.accel_map[:, 2] * (dw / dt)
+            dv = want_v * feasible_scale(base, m.accel_map[:, :2] @ (want_v / dt), limit)
+            acc_xy = dv / dt
 
         acc = np.array([dv[0], dv[1], dw]) / dt
+        self.acc = acc
         self.v = v + acc * dt
         self.current = m.friction_currents(self.v) + m.accel_map @ acc
 
