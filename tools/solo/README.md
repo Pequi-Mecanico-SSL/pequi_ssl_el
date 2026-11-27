@@ -95,6 +95,18 @@ the node restarts with the same team and ids (the page's STRATEGY button); `star
 counts the robot stacks (publishers of `/wheels/state`) on each robot's domain: with two on one domain, the robots of
 that domain get zero and the mode line says so; with none it only warns.
 
+The strategy's parameters can be changed while it plays, with no restart: each is a traced value of the compiled
+policy, so a new value acts on the next tick (3-6 ms, as before) and nothing is compiled again. From the field page:
+PARAMS (unlock first) shows each running policy server's bot, its report (duo_att: mode cautious / free / pick and
+their fastest speed seen) and every profile key with its profile value and its value in force; type a value and
+apply, or set one key or all back to the profile; other keys of the bot can be added by name. From a shell:
+`run_duo.sh params`, `run_duo.sh set a_nfv=1.3 a_hold=2.5`, `run_duo.sh profile [key ...]` (also
+`tools/solo/policy_cfg.py`; `SOLO_POLICY_PORT`, the page's `SOLO_POLICY_PORTS`, default 47001). The server refuses a
+change whole unless every key is a parameter of its bot (not `d_role`) and every value a finite number; the range
+of a value is not checked. Values set live last until the policy server starts again (`run_rung.sh` / `run_duo.sh
+start` start from the profile); a node restart and the STRATEGY button keep them. Each change is printed to
+`/tmp/solo_run/policy.log` with its time and goes to the page's event log.
+
 The field page starts locked (view only) and refuses to drive while another program that commands the robot runs
 on the same computer, including the strategy node; its STRATEGY button stops and restarts the node. It accepts only
 JSON POST requests addressed to its own host and port, so other clients must send

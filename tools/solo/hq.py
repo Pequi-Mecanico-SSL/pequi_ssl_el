@@ -45,6 +45,13 @@ speed is its transit speed, at most 1.0 m/s; its carry speed 0.35 m/s, at most -
 the spot with its tolerance, the line-up point, and the result (POST /place {x, y, precise | tol}; /state "place").
 STOP, LOCK, the dead man's switch, the 0.2 s pose rule and the busy check apply as for a target; a placement also ends
 when the robot leaves the target box widened by 0.25 m. Without place_ball.py the mode is off and the rest works.
+PARAMS opens a panel per running policy server (UDP ports $SOLO_POLICY_PORTS, default 47001; tools/solo/policy_cfg.py):
+the bot's name, what its memory reports now (duo_att: the mode cautious / free / pick and their fastest speed seen),
+and every parameter of the profile (and any changed one) with its profile value and its value in force, changed ones
+marked; while unlocked, a value can be typed and applied, one key or all keys set back to the profile, and any other
+parameter of the bot added by name. The server takes a new value on its next tick with no restart and no recompile
+(POST /params {"port", "set": {key: number}} or {"port", "profile": true | [keys]}; GET /params, read from the
+servers once a second). Every change, its refusal, and the strategy's mode changes go to the event log.
 """
 import json, math, os, signal, socket, subprocess, sys, threading, time, warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -59,6 +66,7 @@ except ImportError:
     GameState = None
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path: sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import procs                                             # the commanding programs, the node's command line check
+import policy_cfg                                        # the strategy's parameters, live (UDP to the policy server)
 try:                                                     # the ball placer; without it the page works, ball mode off
     from place_ball import BallPlacer
     PLACE_ERR = ""
@@ -362,6 +370,46 @@ def gc_listen():
         with LOCK: S["gc"], S["gc_t"] = info, now()
 threading.Thread(target=gc_listen, daemon=True).start()
 
+PPORTS = [int(p) for p in os.environ.get("SOLO_POLICY_PORTS", str(policy_cfg.PORT)).replace(",", " ").split()]
+PV = {p: None for p in PPORTS}; PMODE = {}                # the last reply of each policy server; its last mode
+def params_seen(port, r):
+    """keep a server's reply; a change of the strategy's reported mode goes to the event log"""
+    PV[port] = r
+    rep = r.get("report") or {}
+    if "mode" in rep:
+        m = policy_cfg.MODES.get(int(round(rep["mode"])), str(rep["mode"]))
+        if PMODE.get(port) not in (None, m): event("strategy", f"policy :{port} mode {m} ({policy_cfg.report_text(rep)})")
+        PMODE[port] = m
+def params_poll():
+    while True:
+        for p in PPORTS:
+            r = policy_cfg.ask({"cfg": "get"}, p, timeout=0.3)
+            if "now" in r: params_seen(p, r)
+            else: PV[p] = dict(error=r["error"])
+        time.sleep(1.0)
+threading.Thread(target=params_poll, daemon=True).start()
+def params_post(b):
+    """POST /params: (code, reply); the change and the server's answer go to the event log"""
+    if not isinstance(b, dict) or "port" not in b: return 400, dict(error="bad request: port missing")
+    port = b["port"]
+    if isinstance(port, bool) or port not in PPORTS: return 400, dict(error=f"not a policy server port of this page: {port!r}")
+    req, why = policy_cfg.check_request({k: v for k, v in b.items() if k != "port"})
+    if req is None: return 400, dict(error=why)
+    was = (PV.get(port) or {}).get("now", {})
+    r = policy_cfg.ask(req, port)
+    what = (", ".join(f"{k} {v:g}" for k, v in req["set"].items()) if req["cfg"] == "set"
+            else "back to profile: " + (", ".join(req["keys"]) if "keys" in req else "all"))
+    if "now" not in r or r.get("error"):
+        event("page", f"params :{port} REFUSED {what}: {r.get('error')}")
+        if "now" in r: params_seen(port, r)
+        return 409, dict(error=r.get("error"))
+    params_seen(port, r)
+    old = lambda k: was.get(k, (r.get("profile") or {}).get(k, (r.get("default") or {}).get(k)))
+    diff = [f"{k} {'?' if old(k) is None else format(old(k), 'g')} -> {v:g}"
+            for k, v in r["now"].items() if was.get(k) != v and k in (req.get("set") or req.get("keys") or r["now"])]
+    event("page", f"params :{port} {r['bot']}: " + (", ".join(diff) if diff else what + " (no change)"))
+    return 200, r
+
 def send(vx, vy, w):
     m = Twist(); m.linear.x, m.linear.y, m.angular.z = float(vx), float(vy), float(w); pub.publish(m)
     S["cmd"] = (round(vx, 3), round(vy, 3), round(w, 3))
@@ -436,8 +484,8 @@ canvas{display:block;background:#0b3d1c;cursor:crosshair}#note{color:#fc6}
 #evh{position:sticky;top:0;background:#222;border-bottom:1px solid #3a3a3a;padding:9px 12px;font:bold 14px sans-serif;display:flex;justify-content:space-between;cursor:pointer}
 .ev{display:grid;grid-template-columns:64px 92px 1fr;gap:8px;padding:3px 12px;border-bottom:1px solid #222}.ev .t{color:#888}.ev .x{color:#ddd;overflow-wrap:anywhere}
 .ev.goal{background:#14301a}.ev.card{background:#33240f}.ev.ball{background:#2a1c0c}#pl{display:none;padding:0 10px 4px;font-size:15px;color:#fb6}</style>
-<div id="evp"><div id="evh"><span id="evt">Events</span><span>hide</span></div><div id="evl"></div></div><div id="main" class="wide"><div id="bar"><button id="stop">STOP</button><button id="cov" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">camera map: off</button><button id="evb" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">events</button><button id="lock" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="strat" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="pmode" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;color:#fff"></button><select id="ptol" style="font-size:15px"><option value="rough">rough 0.15 m</option><option value="precise">precise 0.05 m</option></select><label>speed <input id="sp" type="range" min="0.1" max="VMAXV" step="0.05"> <span id="spv"></span> m/s</label>
-<span id="st"></span><span id="note"></span></div><div id="pl"></div><div id="gc" style="padding:0 10px 4px;font-size:17px;font-weight:bold"></div><div id="gc2" style="padding:0 10px 4px;font-size:14px;color:#bbb"></div><div id="ref" style="padding:0 10px 6px;font-size:15px"></div><canvas id="c"></canvas></div>
+<div id="evp"><div id="evh"><span id="evt">Events</span><span>hide</span></div><div id="evl"></div></div><div id="main" class="wide"><div id="bar"><button id="stop">STOP</button><button id="cov" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">camera map: off</button><button id="evb" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">events</button><button id="ppb" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;background:#345;color:#fff">params</button><button id="lock" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="strat" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer"></button><button id="pmode" style="font-size:16px;padding:8px 14px;border-radius:6px;border:0;cursor:pointer;color:#fff"></button><select id="ptol" style="font-size:15px"><option value="rough">rough 0.15 m</option><option value="precise">precise 0.05 m</option></select><label>speed <input id="sp" type="range" min="0.1" max="VMAXV" step="0.05"> <span id="spv"></span> m/s</label>
+<span id="st"></span><span id="note"></span></div><div id="pl"></div><div id="gc" style="padding:0 10px 4px;font-size:17px;font-weight:bold"></div><div id="gc2" style="padding:0 10px 4px;font-size:14px;color:#bbb"></div><div id="ref" style="padding:0 10px 6px;font-size:15px"></div><canvas id="c"></canvas></div><div id="pp" style="display:none;position:fixed;right:8px;top:60px;max-height:85vh;overflow:auto;background:#181818f0;border:1px solid #555;border-radius:6px;padding:8px 10px;font:14px sans-serif;color:#ddd;z-index:5"></div>
 <script>
 let evopen=true,bmode=false,cov=null,covOn=false;
 async function loadCov(){try{cov=await(await fetch('/map')).json()}catch(e){cov=null}}
@@ -506,7 +554,31 @@ async function poll(){try{st=await(await fetch('/state?page=1')).json();if(docum
   else{g1.textContent='no game controller packets';g2.textContent=''}
   plshow()}
  draw()}
-setInterval(poll,100);</script>""".replace("VMAXV", str(VMAX))
+setInterval(poll,100);
+const pp=document.getElementById('pp'),ppb=document.getElementById('ppb');let ppOn=false,ppd=[],ppMsg='';
+ppb.onclick=()=>{ppOn=!ppOn;pp.style.display=ppOn?'block':'none';ppb.style.background=ppOn?'#274':'#345';if(ppOn)ppload()};
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function ppsend(b){try{const r=await fetch('/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json();ppMsg=r.ok?'applied':'REFUSED: '+(j.error||r.status)}catch(e){ppMsg='REFUSED: '+e}ppload(true)}
+function ppapply(port,keys){const set={};for(const k of keys){const el=document.getElementById('pv_'+port+'_'+k);if(!el||el.value.trim()==='')continue;const v=Number(el.value);if(!isFinite(v)||el.value.trim()===''){ppMsg='REFUSED: '+k+' is not a number';ppdraw();return}set[k]=v}
+ if(!Object.keys(set).length){ppMsg='nothing typed';ppdraw();return}ppsend({port:port,set:set})}
+function ppadd(port){const k=document.getElementById('pa_'+port).value.trim(),v=document.getElementById('pav_'+port).value.trim();if(!k||v===''||!isFinite(Number(v))){ppMsg='REFUSED: give a key and a number';ppdraw();return}ppsend({port:port,set:{[k]:Number(v)}})}
+async function ppload(force){try{ppd=await(await fetch('/params')).json()}catch(e){ppd=[]}ppdraw(force)}
+function ppdraw(force){if(!ppOn)return;const ae=document.activeElement;if(!force&&(pp.matches(':hover')||ae&&pp.contains(ae)&&ae.tagName=='INPUT')){ppstat();return}
+ const keep={};for(const el of pp.querySelectorAll('input'))if(el.value)keep[el.id]=el.value;
+ const lk=st&&st.lock;let h='<div style="color:#fb6;margin-bottom:4px">'+(lk?'LOCKED: unlock to change':'type values, then apply (one key or all typed)')+(ppMsg?' | '+esc(ppMsg):'')+'</div>';
+ for(const s of ppd){h+='<div style="margin:6px 0 2px;font-weight:bold">policy :'+s.port+' '+esc(s.bot||'')+'</div>';
+  if(!s.now){h+='<div style="color:#f88">'+esc(s.error||'no answer')+'</div>';continue}
+  h+='<div id="pr_'+s.port+'" style="color:#9cf">'+esc(rtxt(s.report||{}))+'</div><div style="color:#aaa">'+s.changed.length+' changed'+(s.error?' | '+esc(s.error):'')+'</div><table style="border-collapse:collapse">';
+  h+='<tr style="color:#888"><td>key</td><td>profile</td><td>in force</td><td>new</td><td></td></tr>';
+  for(const k in s.now){const ch=s.changed.includes(k),pv=k in s.profile?s.profile[k]:(s.default||{})[k];
+   h+='<tr style="'+(ch?'background:#4a3000':'')+'"><td>'+(ch?'* ':'')+esc(k)+'</td><td>'+pv+'</td><td style="font-weight:bold;color:'+(ch?'#fb6':'#ddd')+'">'+s.now[k]+'</td><td><input id="pv_'+s.port+'_'+esc(k)+'" size="6" '+(lk?'disabled':'')+'></td><td>'
+    +'<button '+(lk?'disabled':'')+' onclick="ppapply('+s.port+',[\''+esc(k)+'\'])">apply</button>'+(ch?'<button '+(lk?'disabled':'')+' onclick="ppsend({port:'+s.port+',profile:[\''+esc(k)+'\']})">back</button>':'')+'</td></tr>'}
+  h+='</table><button '+(lk?'disabled':'')+' onclick="ppapply('+s.port+','+esc(JSON.stringify(Object.keys(s.now)))+')">apply all typed</button> <button '+(lk?'disabled':'')+' onclick="ppsend({port:'+s.port+',profile:true})">all back to profile</button>'
+   +'<div style="margin-top:4px">add <input id="pa_'+s.port+'" list="pk_'+s.port+'" size="12" '+(lk?'disabled':'')+'> = <input id="pav_'+s.port+'" size="6" '+(lk?'disabled':'')+'> <button '+(lk?'disabled':'')+' onclick="ppadd('+s.port+')">set</button><datalist id="pk_'+s.port+'">'+(s.keys||[]).map(k=>'<option value="'+esc(k)+'">').join('')+'</datalist></div>'}
+ pp.innerHTML=h;for(const id in keep){const el=document.getElementById(id);if(el&&!force)el.value=keep[id]}}
+function rtxt(r){const M={0:'cautious',1:'free',2:'pick'},p=[];if('mode' in r)p.push('mode '+(M[Math.round(r.mode)]||r.mode));if('vo_m' in r)p.push('their top speed '+r.vo_m.toFixed(2)+' m/s');if('vb_m' in r)p.push('their ball top '+r.vb_m.toFixed(2)+' m/s');for(const k of Object.keys(r).sort())if(!['mode','vo_m','vb_m'].includes(k))p.push(k+' '+r[k]);return p.join(', ')}
+function ppstat(){for(const s of ppd){const e=document.getElementById('pr_'+s.port);if(e&&s.report)e.textContent=rtxt(s.report)}}
+setInterval(()=>{if(ppOn)ppload()},1000);</script>""".replace("VMAXV", str(VMAX))
 
 MAPV = [None, -1e9, None]                             # the coverage map object, when it was last read, the payload
 def coverage_rows(r):
@@ -548,6 +620,8 @@ class H(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if path == "/map":
             return self.out(json.dumps(coverage()))
+        if path == "/params":
+            return self.out(json.dumps([dict(port=p, **(PV[p] or dict(error="not read yet"))) for p in PPORTS]))
         if path == "/state":
             with LOCK:
                 if "page=1" in query.split("&"): S["poll"] = now()      # the dead man's switch: the page's own polls only
@@ -567,7 +641,7 @@ class H(BaseHTTPRequestHandler):
             return self.refuse(403, "bad Host header")
         if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
             return self.refuse(415, "Content-Type must be application/json")
-        if self.path not in ("/stop", "/speed", "/goto", "/place", "/lock", "/strategy"):
+        if self.path not in ("/stop", "/speed", "/goto", "/place", "/lock", "/strategy", "/params"):
             return self.refuse(404, "no such request")
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -587,6 +661,9 @@ class H(BaseHTTPRequestHandler):
         if S["lock"] and self.path != "/stop":
             with LOCK: note("locked: unlock first")
             return self.refuse(423, "locked: unlock first")
+        if self.path == "/params":
+            code, r = params_post(b)
+            return self.out(json.dumps(r), code=code)
         if self.path == "/strategy":
             ok, on = check_flag(b, "on")
             if not ok: return self.refuse(400, "on must be true or false")
