@@ -184,8 +184,9 @@ def step_team(q, mem):
                 out["v"].append([0.0, 0.0]); out["w"].append(0.0); out["mode"].append("robot not seen"); continue
             b, p_i = np.asarray(q["ball"][:2]), np.asarray(r[:2])
             if place is not None:                               # the corridor ball -> spot counts as the ball
-                tgt = off_ball(tg[i], nearest(tg[i], b, place), p_i, args.stop_keep)
+                tgt = off_ball(tg[i], nearest(tg[i], b, place), p_i, args.stop_keep + 0.1)
                 vv, w = stop_cmd({**q, "us": r, "ball": list(nearest(p_i, b, place))}, tgt, float(hd[i]))
+                vv = keep_apart(vv, p_i, [nearest(p_i, b, place)], args.stop_keep + 0.05)   # the line moves with the ball: more margin
             else:
                 vv, w = stop_cmd({**q, "us": r}, off_ball(tg[i], b, p_i, args.stop_keep), float(hd[i]))
             vv = keep_apart(vv, np.asarray(r[:2]), [o[:2] for j, o in enumerate(us) if j != i and seen[j]], args.own_gap)
@@ -231,6 +232,9 @@ STEP = step_team if TEAM else step
 for _ in range(3):                                              # the same calls the loop makes, until nothing recompiles
     _, m = STEP(Q0, m)
     _, m = STEP({**Q0, "state": int(GS.STOP), "next": [int(Next.FREE_KICK), 0, -1.0, 1.0]}, m)
+    _, m = STEP({**Q0, "state": int(GS.STOP)}, m)                                         # a stop with no restart named
+    _, m = STEP({**Q0, "state": int(GS.BALL_PLACEMENT), "place": [-0.5, -0.4]}, m)
+    _, m = STEP({**Q0, "state": int(GS.FREE_KICK), "ours": True}, m)
 t1 = time.perf_counter(); STEP(Q0, m); warm_ms = (time.perf_counter() - t1) * 1000
 print(f"compiled in {time.time() - t0:.0f} s (a step now takes {warm_ms:.1f} ms); field {G.field_length} x {G.field_width} m; "
       f"listening on 127.0.0.1:{args.port}", flush=True)
