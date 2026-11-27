@@ -17,6 +17,7 @@ Environment variables:
 | `ROBOT` | required by `robot_stack.sh` | `user@address` of the robot's computer |
 | `SSHPASS` | required by `robot_stack.sh` | the robot login's password, read by `sshpass -e` |
 | `ROBOT_CONFIG` | optional | robot_control configuration for `robot_stack.sh` (default `three_wheel`) |
+| `ROBOT_LAUNCH` | optional | robot_control launch file for `robot_stack.sh`: `robot.yaml` (default, the four-node stack) or `drive.yaml` (the drive node) |
 | `SOLO_DATA` | optional | folder for recordings, logs, the vision map and the field page's event log (default `<repo>/log/solo`, created if missing) |
 | `SOLO_DOMAIN` | optional | ROS domain on both sides, laptop (`env.sh`) and robot (`robot_stack.sh`) (default 77) |
 | `SOLO_IFACE` | optional | this computer's address on the robot's network: DDS uses only that address; the field page joins the game controller's multicast on it, `auto_session.py` the vision multicast |
