@@ -8,6 +8,9 @@ Subscribes:
     /vision/poses/<other team>/robot<0..2>       geometry_msgs/Pose2D   their robots
     /vision/poses/ball                           geometry_msgs/Pose2D
     /referee/game_state                          pequi_msgs/GameState
+    /referee/state                               pequi_msgs/RefereeState   score, foul counters and yellow-card times, passed on
+                                                 to the policy server as "ref" (a trained policy sees them; a scripted
+                                                 one does not read them)
 Publishes:
     cmd_topic (default /<team>/robot<robot_index>/cmd_vel)   geometry_msgs/Twist, body frame (x forward, y left, z CCW)
     /solo/debug                                  std_msgs/String (JSON, 5 Hz)
@@ -49,7 +52,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Pose2D, Twist
-from pequi_msgs.msg import GameState
+from pequi_msgs.msg import GameState, RefereeState
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, JointState
@@ -126,6 +129,8 @@ class SoloNode(Node):
                                      lambda m, i=i: self.opp[i].add(self.now(), m.x, m.y, m.theta), 10)
         self.create_subscription(Pose2D, f'{vp}/ball', lambda m: self.ball.add(self.now(), m.x, m.y), 10)
         self.create_subscription(GameState, '/referee/game_state', self.on_game_state, 10)
+        self.ref, self.ref_time = None, 0.0
+        self.create_subscription(RefereeState, '/referee/state', self.on_referee, 10)
         self.recover = bool(g('recover'))
         self.seen_run, self.last_vis_t = 0, -1.0
         if self.recover:
@@ -171,6 +176,17 @@ class SoloNode(Node):
 
     def on_game_state(self, m):
         self.gs, self.gs_time = m, self.now()
+
+    def on_referee(self, m):
+        self.ref, self.ref_time = m, self.now()
+
+    def ref_numbers(self, now):
+        """score, foul counters and the time left of the longest yellow card, ours first; None without a fresh referee message"""
+        if self.ref is None or now - self.ref_time > 1.0:
+            return None
+        us, them = (self.ref.blue, self.ref.yellow) if self.team == 'blue' else (self.ref.yellow, self.ref.blue)
+        card = lambda t: float(max(t.yellow_card_times, default=0.0))
+        return dict(score=[int(us.score), int(them.score)], fouls=[int(us.foul_counter), int(them.foul_counter)], cards=[card(us), card(them)])
 
     def tick(self):
         now = self.now()
@@ -276,6 +292,11 @@ class SoloNode(Node):
                  us=[sx * x, y, wrap(math.pi - th) if mirror else th, sx * vx, vy, 1], opp=opp, ball=[sx * bx, by, sx * bvx, bvy])
         if nxt is not None:
             q['next'] = [nxt[0], bool(nxt[1]), sx * bx, by]
+        if command in PREPARE:
+            q['prep'] = True
+        ref = self.ref_numbers(now)
+        if ref is not None:
+            q['ref'] = ref
         self.seq += 1
         q['seq'] = self.seq
         try:
@@ -320,6 +341,7 @@ class SoloNode(Node):
         return dict(mode=f"{r['mode']} (state {state}{', our kick' if ours else ''})", t=round(now, 2), state=state, ours=bool(ours),
                     mirror=mirror, us=[round(v, 3) for v in (x, y, th)], ball=[round(bx, 3), round(by, 3)], opp=len(opp),
                     v_field=[round(vfx, 2), round(vfy, 2)], v_body=[round(bx, 2), round(by, 2)], w=round(out.angular.z, 2), cmd_age=round(now - self.cmd_t, 1), ms=r.get('ms'),
+                    drib=r.get('drib'),
                     unseen=round(age, 3), scale=round(scale, 2))
 
     def _recover(self, now, out, state, own_sign, age):

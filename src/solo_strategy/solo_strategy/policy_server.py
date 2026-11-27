@@ -30,7 +30,25 @@ one at the values in force, "changed": [keys], "default": the bot's own value of
 mode 0 cautious / 1 free / 2 pick, ...), "keys": every parameter name, "compiles", "error" when refused}. Each
 accepted change is printed to the log with the clock time.
 States are sslrules.GameState values. The policy acts in RUNNING / FREE_KICK / KICKOFF / PENALTY; in STOP the robot
-goes to the team's restart pose (at --stop-speed at most) and keeps 0.6 m from the ball; in every other state it stands still."""
+goes to the team's restart pose (at --stop-speed at most) and keeps 0.6 m from the ball; in every other state it stands still.
+
+A trained policy instead of a scripted one (one robot): --ckpt <checkpoint of the strategy simulator> [--robot <the
+robot the checkpoint is told it has: a simulator robot definition with single-valued command ramps, e.g.
+three_wheel_fast; the files that define it in SSL_ROBOTS>]. The simulator's sslenv.deploy rebuilds the observation the
+policy was trained on from these requests and its own memory (latency compensation from the commands sent, the frame
+stack, how far the robot has carried the ball), so the server must see every tick, also the ones the policy does not
+play, and the commands in its replies must reach the robot as they are (the node's own ramp off: ramp_fwd 0, ramp_side
+0; angular_cap 6): they already carry the robot's command ramps. Differences to a scripted bot:
+  - a request may carry "ref": {"score": [ours, theirs], "fouls": [ours, theirs], "cards": [s left of our longest
+    yellow card, of theirs]} (the policy sees them; zeros without it) and "prep": true while the referee's command is
+    PREPARE_KICKOFF / PREPARE_PENALTY: the robot then goes to its place for that kick as in a stop, and the policy
+    plays from the NORMAL_START on;
+  - the stop commands go through the same command ramps as the policy's; in a halt the reply is zero at once;
+  - the reply carries "drib", the carried distance the policy is shown (1 = the dribbling limit of 1 m);
+  - for tests: "placed": true in a request says the robot was put somewhere and stands still (a simulator's restart),
+    "frame": true asks for the policy's newest observation frame in the reply (tools/solo/tests/rl_replay.py);
+  - the parameters (cfg requests) are the estimate's: rl_touch (m added to the referee's touch distance), rl_rel
+    (ball detections in a row away from the robot that end a touch), rl_clock (factor on the carried distance)."""
 import argparse
 import json
 import socket
@@ -44,7 +62,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--bot", default="solo_nk")
 ap.add_argument("--params", default="{}", help="JSON overrides of the bot's PARAMS")
 ap.add_argument("--port", type=int, default=47001)
-ap.add_argument("--robot", default="three_wheel")
+ap.add_argument("--ckpt", default="", help="a trained checkpoint of the strategy simulator instead of --bot (one robot)")
+ap.add_argument("--robot", default=None, help="the robot: scripted bots default to three_wheel, a checkpoint to the one it was trained on")
 ap.add_argument("--stop-speed", type=float, default=0.6, help="top speed while the game is stopped, m/s (the limit is 0.75)")
 ap.add_argument("--stop-keep", type=float, default=0.7, help="two robots: in a stop no robot's target is nearer the ball than this, m (centres; the rule is 0.5 m + the robot's radius)")
 ap.add_argument("--keep", default="", help="comma-separated top-level memory keys a request's reset leaves as they are (game-long "
@@ -62,8 +81,16 @@ from sslenv.realism import robot as robot_cfg
 from sslenv.rules import Next
 from sslenv.scripted.frame import AV, restart_view
 
-mod = importlib.import_module("sslenv.scripted." + args.bot)
-cfg = dataclasses.replace(tourney_cfg(level="realistic"), robots=None, **robot_cfg(args.robot))
+RL = bool(args.ckpt)
+if RL:
+    from sslenv import deploy
+    mod = deploy.load(args.ckpt, args.robot)
+    cfg = mod.cfg
+    args.bot = "rl:" + args.ckpt.rsplit("/", 1)[-1]
+    assert mod.TEAM_SIZE == 1, f"{args.ckpt} fields {mod.TEAM_SIZE} robots: the server plays a checkpoint with one"
+else:
+    mod = importlib.import_module("sslenv.scripted." + args.bot)
+    cfg = dataclasses.replace(tourney_cfg(level="realistic"), robots=None, **robot_cfg(args.robot or "three_wheel"))
 G = cfg.rules.geometry
 L2, W2 = G.field_length / 2, G.field_width / 2
 N = 3
@@ -124,6 +151,22 @@ def act(P, mem, av):
 def stop_pose(P, mem, av, kind, kteam, spot):
     tg, hd, use = mod.stop_pose(P, mem, restart_view(av, kind, kteam, spot), cfg)
     return tg[0, 0], hd[0, 0]
+
+
+@jax.jit
+def rl_tick(P, mem, av, ext, sent, play):
+    """a checkpoint's tick: the policy's command (play) or the command `sent` [vx, vy m/s, w rad/s] through its ramps"""
+    s3 = jnp.zeros((1, N, 3), jnp.float32).at[0, 0].set(sent)
+    _, cmd, mem = mod.tick(P, mod.actor, mem, av, ext, s3, jnp.reshape(play, (1,)))
+    return cmd[0, 0, :2] * cfg.v_cap, cmd[0, 0, 2] * cfg.w_cap, mem["drib"][0], mem
+
+
+def ext_of(q):
+    """the referee's numbers of a request, ours first (zeros when the node sends none)"""
+    ref = q.get("ref") or {}
+    two = lambda k, dt: jnp.asarray([[(ref.get(k) or [0, 0])[0], (ref.get(k) or [0, 0])[1]]], dt)
+    return dict(score=two("score", jnp.int32), fouls=two("fouls", jnp.int32), cards=two("cards", jnp.float32),
+                placed=jnp.asarray([bool(q.get("placed"))]))
 
 
 def wrap(a):
@@ -239,7 +282,7 @@ NOW = dict(NOW0)                                                        # the va
 # checked); read from the bots' guards, widened to every default and profile value in use (nk_da_run 0.12)
 LIMITS = dict(nk_fm=(-0.3, 0.1), nk_da_a=(0.5, 3.0), d_vn=(0.0, 1.0), d_rn=(0.3, 1.0), nk_od=(0.2, 1.0), d_od=(0.15, 1.0),
               nk_da=(0.3, 0.8), nk_da_run=(0.1, 0.6), d_own=(0.0, 0.5), d_kr=(0.65, 1.2), nk_v=(0.0, 1.5), a_tau=(0.05, 5.0),
-              lu_c0=(0.01, 1.0), lu_c1=(0.01, 1.0), a_vk=(0.3, 2.0))
+              lu_c0=(0.01, 1.0), lu_c1=(0.01, 1.0), a_vk=(0.3, 2.0), rl_touch=(-0.01, 0.05), rl_rel=(1.0, 15.0), rl_clock=(0.5, 2.0))
 FIXED = {"d_role"}           # what the server plays (one robot or the team) is set at start: run_duo.sh checks it there
 
 
@@ -261,7 +304,7 @@ def cfg_view(error=None):
                 rep[k] = round(float(np.asarray(v)[0]), 3)                # one host copy, no device op
     out = dict(bot=args.bot, profile=PROFILE, now={k: NOW[k] for k in sorted(set(PROFILE) | set(changed))},
                changed=changed, default={k: g7(mod.PARAMS[k]) for k in changed if k not in PROFILE}, report=rep,
-               keys=sorted(P), limits={k: list(v) for k, v in LIMITS.items() if k in P}, compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team)))
+               keys=sorted(P), limits={k: list(v) for k, v in LIMITS.items() if k in P}, compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team, rl_tick)))
     if error:
         out["error"] = error
     return out
@@ -327,6 +370,29 @@ def step(q, mem):
     return dict(v=[0.0, 0.0], w=0.0, mode="halt"), mem
 
 
+def step_rl(q, mem):
+    """a checkpoint: every tick with our robot in view goes through its memory, whoever commands the robot"""
+    st = int(q["state"])
+    if not q["us"][5]:
+        return dict(v=[0.0, 0.0], w=0.0, mode="robot not seen"), mem
+    av, ext = make_av(q), ext_of(q)
+    prep = bool(q.get("prep")) and st in (int(GS.KICKOFF), int(GS.PENALTY))
+    if st in ACTS and not prep:
+        v, w, drib, mem = rl_tick(P, mem, av, ext, jnp.zeros((3,), jnp.float32), True)
+        return dict(v=[float(v[0]), float(v[1])], w=float(w), mode="play", drib=round(float(drib), 3)), mem
+    if st in STOPS or prep:
+        kind, ours, sx, sy = q.get("next") or [int(Next.FORCE_START), 0, q["ball"][0], q["ball"][1]]
+        if prep:
+            kind, ours, sx, sy = int(Next.KICKOFF if st == int(GS.KICKOFF) else Next.PENALTY), q["ours"], q["ball"][0], q["ball"][1]
+        tg, hd = stop_pose(P, mem, av, jnp.asarray([int(kind)], jnp.int32), jnp.asarray([0 if ours else 1], jnp.int32),
+                           jnp.asarray([[sx, sy]], jnp.float32))
+        vv, w = stop_cmd(q, np.asarray(tg), float(hd))
+        v, w, drib, mem = rl_tick(P, mem, av, ext, jnp.asarray([vv[0], vv[1], w], jnp.float32), False)
+        return dict(v=[float(v[0]), float(v[1])], w=float(w), mode="stop", drib=round(float(drib), 3)), mem
+    _, _, drib, mem = rl_tick(P, mem, av, ext, jnp.zeros((3,), jnp.float32), False)
+    return dict(v=[0.0, 0.0], w=0.0, mode="halt", drib=round(float(drib), 3)), mem
+
+
 Q0 = dict(t=0.0, state=int(GS.RUNNING), ours=False, cmd_t=0.0, still_since=0.0, last_team=0, kick_pos=[0.0, 0.0],
           us=[-L2 + 0.4, 0.0, 0.0, 0.0, 0.0, 1], opp=[[1.0, 0.5, 3.14, 0.0, 0.0, 1]], ball=[0.0, 0.0, 0.0, 0.0])
 t0 = time.time()
@@ -336,10 +402,13 @@ TEAM_SIZE = int(getattr(mod, "TEAM_SIZE", 1))
 TEAM = TEAM_SIZE > 1                       # a team bot: the requests name several robots
 if TEAM:
     Q0 = {**Q0, "us": [Q0["us"], [-0.5, 0.3, 0.0, 0.0, 0.0, 1]]}
-STEP = step_team if TEAM else step
+STEP = step_rl if RL else step_team if TEAM else step
 WARM = (Q0, {**Q0, "state": int(GS.STOP), "next": [int(Next.FREE_KICK), 0, -1.0, 1.0]},
         {**Q0, "state": int(GS.STOP)},                                                    # a stop with no restart named
         {**Q0, "state": int(GS.BALL_PLACEMENT), "place": [-0.5, -0.4]}, {**Q0, "state": int(GS.FREE_KICK), "ours": True})
+if RL:
+    WARM += ({**Q0, "state": int(GS.KICKOFF), "ours": True, "prep": True}, {**Q0, "state": int(GS.HALT)},
+             {**Q0, "ref": {"score": [1, 0], "fouls": [2, 1], "cards": [0.0, 30.0]}})
 for wq in WARM:                         # each call also with the start memory: the loop starts from mem0, and a first stop
     STEP(wq, mem0)                      # before any play step would otherwise compile for it then (about 20 s)
 for _ in range(3):                                              # the same calls the loop makes, until nothing recompiles
@@ -368,7 +437,9 @@ while True:
             continue
         if q.get("reset"):
             mem = reset_mem(mem)
-        out, mem = (step_team if is_team(q) else step)(q, mem)
+        out, mem = (step_rl if RL else step_team if is_team(q) else step)(q, mem)
+        if RL and q.get("frame") and q["us"][5]:                # for tests: the newest observation frame of the robot
+            out["frame"] = [float(x) for x in np.asarray(mem["stack"][0, 0, 0])]
         if is_team(q):
             out["team_size"] = TEAM_SIZE                        # the client checks that the bot plays its number of robots
             if isinstance(mem, dict) and "vo_m" in mem:         # duo_att: the fastest opponent speed seen in play so far,

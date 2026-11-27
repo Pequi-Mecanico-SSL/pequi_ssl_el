@@ -32,6 +32,8 @@ Environment variables:
 | `SOLO_RUN_DIR` | optional | where the field page finds the strategy node's saved command line (default `/tmp/solo_run`, which `run_real.sh` uses) |
 | `SOLO_OVERLAY` | optional | a second `setup.bash` (a pinned build of `solo_strategy`) sourced on top by `env.sh` |
 | `SOLO_ARENA`, `SOLO_SRC` | optional | for `run_real.sh`: another simulator source tree, another `src` folder for the policy server |
+| `SOLO_CKPT` | optional | for `run_real.sh` / `run_rung.sh 4`: a checkpoint of the strategy simulator; the trained policy plays instead of the scripted one (see "A trained policy") |
+| `SOLO_RL_ROBOT`, `SOLO_RL_ROBOTS` | optional | with `SOLO_CKPT`: the simulator robot definition the policy is told it has (default `three_wheel_fast`) and the files that define it (default `robots/three_wheel_fast.json:robots/three_wheel_fast_5a.json` of the simulator checkout) |
 | `SOLO_CMD_TOPIC`, `SOLO_CMD_RELIABLE` | optional | velocity topic of the test tools (default `/cmd_vel`); set `SOLO_CMD_RELIABLE` for a reliable publisher |
 | `SOLO_BOX`, `SOLO_BRAKE`, `SOLO_BRAKE_BOX`, `SOLO_BRAKE_FIRST`, `SOLO_SETTLE`, `SOLO_RAMP` | optional | test area and braking of `characterize.py`, `series.py` and `place_ball.py` (see their docstrings) |
 | `SOLO_GOTO_BOX` | optional | `series.py`: the area the robot may cross on its way to a test's start (default: the test's own box, so a robot that starts outside it stops at once); `auto_session.py` sets it for its series steps: with a home area always the home area less 0.25 m at its open edges (`characterize.py goto` stops only when it leaves that box, at up to 0.6 m/s; walls stay), a given value (shell, header or step) clipped to that and refused at load when it does not intersect it, mirrored on a switch of halves; without a home area the given value, else the session header's `SOLO_BOX` |
@@ -81,9 +83,11 @@ The match set-up by one number (`run_rung.sh`; `run_rung.sh show <n> ...` prints
 tools/solo/run_rung.sh 1 <blue|yellow> <keeper id> <field id> [mirror]   # two robots, duo_att, profiles/duo_att.json
 tools/solo/run_rung.sh 2 <blue|yellow> <keeper id> <field id> [mirror]   # two robots, duo_nk, profiles/field.json
 tools/solo/run_rung.sh 3 <blue|yellow> <keeper id> <field id> [mirror]   # one robot (the keeper id), solo_nk, profiles/field.json
+SOLO_CKPT=<checkpoint> tools/solo/run_rung.sh 4 <blue|yellow> <keeper id> <field id> [mirror]   # one robot (the keeper id), a trained policy
 ```
 
-All three at 1.5 m/s. `profiles/field.json` is the profile the one robot plays on the real field; rung 3 also turns
+Rungs 1 to 3 at 1.5 m/s; rung 4 is described under "A trained policy". `profiles/field.json` is the profile the one
+robot plays on the real field; rung 3 also turns
 the drive-back on (`recover:=true`). `duo_att` (the strategy simulator's `sslenv.scripted.duo_att`, `SOLO_BOT=duo_att`
 for `run_duo.sh`) needs a simulator checkout that has it (`SOLO_SIM_DIR` / `SOLO_ARENA`). Its keeper keeps goal; the
 field robot plays every ball it reaches first while their robots are slow, and becomes `duo_nk`'s wall for the rest of
@@ -106,6 +110,52 @@ change whole unless every key is a parameter of its bot (not `d_role`) and every
 of a value is not checked. Values set live last until the policy server starts again (`run_rung.sh` / `run_duo.sh
 start` start from the profile); a node restart and the STRATEGY button keep them. Each change is printed to
 `/tmp/solo_run/policy.log` with its time and goes to the page's event log.
+
+## A trained policy
+
+One robot can be played by a policy trained in the strategy simulator instead of a scripted one. Not yet run on a
+robot or with ROS: checked so far against the simulator only (below).
+
+```bash
+SOLO_CKPT=<checkpoint .pkl> tools/solo/run_rung.sh 4 <blue|yellow> <robot's vision id> <any id> [mirror]
+SOLO_CKPT=<checkpoint .pkl> tools/solo/run_real.sh start <blue|yellow> [mirror]      # the same without the id set-up
+```
+
+The simulator checkout (`SOLO_SIM_DIR` / `SOLO_ARENA`) must have `sslenv.deploy` (its branch `thiago/real-rl`). The
+policy server then runs `policy_server.py --ckpt`: the simulator's `sslenv.deploy` rebuilds, from the node's requests
+and its own memory, the observation the policy was trained on (latency compensation from the commands it sent, the
+last four frames, how far the robot has carried the ball, the keeper-held-ball clocks). What follows from that:
+
+- The server must see every tick and its commands must reach the robot as they are. They already carry the command
+  ramps of the robot definition `SOLO_RL_ROBOT` (default `three_wheel_fast`: 1.7 m/s^2 forward, 1.5 sideways, braking
+  3), so `run_real.sh` starts the node with its own ramp off, speed cap 1.5 m/s and yaw cap 6 rad/s. A lower
+  `speed_cap` clips the command after the server and the policy's memory then holds a command the robot did not get.
+  For the robot at an ESC limit of 5 A: `SOLO_RL_ROBOT=three_wheel_fast_5a`.
+- `solo_node` passes the score, the foul counters and the yellow-card times of `/referee/state` on to the server
+  (`ref` in the request), and marks the ticks of PREPARE_KICKOFF / PREPARE_PENALTY (`prep`): the robot goes to its
+  place for that kick as in a stop and the policy plays from NORMAL_START on. In a stop the robot goes where
+  `solo_nk` would send it (at a force start: 0.72 m behind the ball, as the policy was trained), through the same
+  command ramps; in a halt the command is zero at once.
+- The drive-back (`recover`) stays off: it commands the robot without the server.
+- The debug line (`/solo/debug`) and the server's reply carry `drib`, the carried distance the policy is shown (1 =
+  the dribbling limit). It is an estimate from vision by the referee's rule (ball within robot + ball radius + 10 mm
+  of the robot's centre). A policy without it dribbles too far, so watch it on the first runs: with the ball in the
+  robot's front it must count up, and fall to zero when the ball leaves.
+- Live parameters (`run_duo.sh params | set | profile`, the page's PARAMS): `rl_touch` (m added to that touch
+  distance), `rl_rel` (ball detections in a row away from the robot that end a touch, default 2), `rl_clock` (factor
+  on the carried distance shown; above 1 the policy lets the ball go earlier).
+- One robot only (`solo_node`); `duo_node` does not send `ref` / `prep`.
+
+Checks without a robot (they need the simulator checkout and a checkpoint; about two minutes):
+
+```bash
+POLICY_LIVE=<simulator checkout> POLICY_CKPT=<checkpoint .pkl> uv run --with pytest --with numpy pytest -q tools/solo/tests/test_policy_rl.py
+```
+
+`tests/rl_replay.py` plays a simulated game per colour with the checkpoint going through `sslenv.deploy`, sends every
+tick to a `policy_server.py` process as the node's request and compares what the server shows the policy with what the
+simulator showed it. How the policy then scores, played directly and through `sslenv.deploy`, is the simulator's
+`tools/deploy_check.py`.
 
 The field page starts locked (view only) and refuses to drive while another program that commands the robot runs
 on the same computer, including the strategy node; its STRATEGY button stops and restarts the node. It accepts only
