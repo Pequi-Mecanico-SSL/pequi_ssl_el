@@ -228,6 +228,13 @@ def reset_mem(mem):
     return {**mem0, **{k: mem[k] for k in KEEP}} if KEEP else mem0
 
 
+def g7(x):
+    """a float32 value as the short decimal it was given as (0.35, not 0.3499999940395355)"""
+    return float(f"{float(x):.7g}")
+
+
+NOW0 = {k: g7(v) for k, v in P0.items()}                               # Python floats: no device read per request
+NOW = dict(NOW0)                                                        # the values in force, as P holds them
 FIXED = {"d_role"}           # what the server plays (one robot or the team) is set at start: run_duo.sh checks it there
 
 
@@ -239,20 +246,15 @@ def finite(v):
     return v if np.isfinite(v) and abs(v) < 3.4e38 else None              # finite as float32 too (1e39 is not)
 
 
-def g7(x):
-    """a float32 value as the short decimal it was given as (0.35, not 0.3499999940395355)"""
-    return float(f"{float(x):.7g}")
-
-
 def cfg_view(error=None):
     """the reply to a cfg request: the parameters in force, the profile, the strategy's memory report"""
-    changed = sorted(k for k in P if float(P[k]) != float(P0[k]))
+    changed = sorted(k for k in NOW if NOW[k] != NOW0[k])
     rep = {}
     if isinstance(mem, dict):
         for k, v in mem.items():                                   # the per-batch scalars (shape (1,)): the bot's state
             if hasattr(v, "shape") and tuple(v.shape) == (1,):
-                rep[k] = round(float(v[0]), 3)
-    out = dict(bot=args.bot, profile=PROFILE, now={k: g7(P[k]) for k in sorted(set(PROFILE) | set(changed))},
+                rep[k] = round(float(np.asarray(v)[0]), 3)                # one host copy, no device op
+    out = dict(bot=args.bot, profile=PROFILE, now={k: NOW[k] for k in sorted(set(PROFILE) | set(changed))},
                changed=changed, default={k: g7(mod.PARAMS[k]) for k in changed if k not in PROFILE}, report=rep,
                keys=sorted(P), compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team)))
     if error:
@@ -288,9 +290,10 @@ def cfg_request(q):
         upd = {k: float(P0[k]) for k in keys}
     else:
         return cfg_view(f"unknown cfg request {op!r} (get, set, profile)")
-    was = {k: g7(P[k]) for k in upd}
+    was = {k: NOW[k] for k in upd}
     P = {**P, **{k: jnp.float32(v) for k, v in upd.items()}}           # float32 scalars, as compiled: no recompile
-    diff = [f"{k} {was[k]:g} -> {g7(P[k]):g}" for k in sorted(upd) if was[k] != g7(P[k])]
+    NOW.update({k: g7(P[k]) for k in upd})
+    diff = [f"{k} {was[k]:g} -> {NOW[k]:g}" for k in sorted(upd) if was[k] != NOW[k]]
     print(time.strftime("%H:%M:%S") + " params " + (", ".join(diff) if diff else "unchanged") + f" ({op})", flush=True)
     return cfg_view()
 

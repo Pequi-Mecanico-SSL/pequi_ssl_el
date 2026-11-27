@@ -192,13 +192,16 @@ def test_real_server_live_set():
         t1 = time.perf_counter(); r = tick(2.0, 0.6); first = (time.perf_counter() - t1) * 1000
         assert r["cautious"] and first < 100 and any(abs(x) > 1e-6 for v in r["v"] for x in v)
         assert ask({"cfg": "get"})["compiles"] == c0
+        ms = sorted(ask({"cfg": "get"})["ms"] for _ in range(20))      # a cfg request delays the next tick by this
+        print("cfg get server ms: median", ms[10], "max", ms[-1])
+        assert ms[10] < 2.0
         for bad in (float("nan"), float("inf"), 1e39, "x", True):
             r = ask({"cfg": "set", "set": {"a_nfv": bad}})
             assert "error" in r and r["now"]["a_nfv"] == 0.2
         assert "error" in ask({"cfg": "set", "set": {"d_role": 0}})
         tick(3.0, 0.0, reset=True)                                     # a node restart: the values stay
         assert ask({"cfg": "get"})["now"]["a_nfv"] == 0.2
-        r = ask({"cfg": "profile"}); assert r["changed"] == [] and r["now"]["a_nfv"] == 0.9
+        r = ask({"cfg": "profile"}); assert r["changed"] == [] and r["now"]["a_nfv"] == float(prof["a_nfv"])
         assert not tick(3.1, 0.6)["cautious"]
     finally:
         p.terminate(); p.wait(10)
