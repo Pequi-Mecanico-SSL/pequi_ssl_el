@@ -364,7 +364,10 @@ class DuoNode(Node):
                                     v_body=[round(cmds[vid][0], 2), round(cmds[vid][1], 2)], w=round(cmds[vid][2], 2), scale=round(v.scale, 2))
         line = '; '.join(f"{'K' if vid == self.keeper else 'F'}{vid} {views[vid].status}"
                          + (f" {modes[k]}" if views[vid].drives else '') for k, vid in enumerate(order))
-        return dict(base, mode=f"{line} (state {state}{', our kick' if ours else ''})", opp=len(opp), ms=r.get('ms'))
+        if 'their_v' in r:          # duo_att: the fastest robot of theirs seen in play, and the cautious mode it switched on
+            line += f"; their top {r['their_v']:.1f} m/s{' CAUTIOUS' if r.get('cautious') else ''}"
+        return dict(base, mode=f"{line} (state {state}{', our kick' if ours else ''})", opp=len(opp), ms=r.get('ms'),
+                    their_v=r.get('their_v'), cautious=r.get('cautious'))
 
 
 def _stop_signal(signum, frame):

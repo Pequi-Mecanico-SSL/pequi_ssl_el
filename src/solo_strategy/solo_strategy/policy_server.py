@@ -268,6 +268,9 @@ while True:
         out, mem = (step_team if is_team(q) else step)(q, mem)
         if is_team(q):
             out["team_size"] = TEAM_SIZE                        # the client checks that the bot plays its number of robots
+            if isinstance(mem, dict) and "vo_m" in mem:         # duo_att: the fastest opponent speed seen in play so far,
+                out["their_v"] = round(float(mem["vo_m"][0]), 2)    # and whether it made the team cautious (a_nf 2)
+                out["cautious"] = bool(float(P["a_nf"]) > 1.5 and float(mem["vo_m"][0]) >= float(P["a_nfv"]))
     except Exception as e:                                      # a bad packet must not stop the server
         n_us = len(q["us"]) if isinstance(q, dict) and isinstance(q.get("us"), list) and q["us"] and isinstance(q["us"][0], list) else 0
         out = dict(v=[[0.0, 0.0]] * n_us, w=[0.0] * n_us, mode=[f"error: {e!r}"[:200]] * n_us) if n_us else dict(v=[0.0, 0.0], w=0.0, mode=f"error: {e!r}"[:200])
