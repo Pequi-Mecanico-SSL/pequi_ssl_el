@@ -1,8 +1,12 @@
 """Record the robot's own topics (commands, wheel telemetry, IMU) as JSON lines, gzip.
-    source tools/solo/env.sh; python3 tools/solo/record_robot.py [--out DIR] [--robot | --laptop]
+    source tools/solo/env.sh; python3 tools/solo/record_robot.py [--out DIR] [--robot | --laptop] [--tag NAME]
 --out defaults to $SOLO_DATA/raw (SOLO_DATA default: log/solo in this repository; created if missing).
 --robot: run ON the robot (nothing crosses the Wi-Fi): its topics without /solo/debug, flushed every 2 s (power cuts).
---laptop: only what the laptop publishes itself (/cmd_vel, /solo/debug), the companion of a recorder on the robot.
+--laptop: only what the laptop publishes itself (/cmd_vel, /solo/debug, and the two-robot node's copies of its commands,
+/duo/robot<id>/cmd_vel), the companion of a recorder on the robot.
+--tag: added to the file name (robot_<date>_<time>_<tag>.jsonl.gz), e.g. the robot whose domain is recorded: two
+recorders started in the same second then write two files. Two robots: one recorder per robot's ROS domain
+(SOLO_DOMAIN=<n> source tools/solo/env.sh first), each with its own tag.
 Lines: {"t": unix, "topic": ..., ...fields}. wheels/state: velocity rad/s, effort = Iq A, position rad.
 imu: all three accelerations and rates (az shows the robot being lifted or set down, ax/ay a tilt while it is carried)."""
 import gzip, json, os, sys, time
@@ -15,7 +19,9 @@ from std_msgs.msg import Float32MultiArray, String
 
 out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else os.path.join(os.environ.get("SOLO_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "log", "solo")), "raw")
 os.makedirs(out, exist_ok=True)
-path = f"{out}/robot_{time.strftime('%Y%m%d_%H%M%S')}.jsonl.gz"
+tag = sys.argv[sys.argv.index("--tag") + 1] if "--tag" in sys.argv else ""
+if tag and not tag.replace("_", "").replace("-", "").isalnum(): sys.exit(f"--tag: letters, digits, - and _ only, not {tag!r}")
+path = f"{out}/robot_{time.strftime('%Y%m%d_%H%M%S')}{'_' + tag if tag else ''}.jsonl.gz"
 f = gzip.open(path, "wt", compresslevel=5)
 print("recording to", path, flush=True)
 ON_ROBOT, ON_LAPTOP = '--robot' in sys.argv, '--laptop' in sys.argv; FLUSH = 2.0 if ON_ROBOT else 60.0
@@ -32,6 +38,8 @@ if not ON_LAPTOP:
   n.create_subscription(Imu, '/imu', lambda m: w('imu', gz=round(m.angular_velocity.z, 4), ax=round(m.linear_acceleration.x, 3), ay=round(m.linear_acceleration.y, 3), az=round(m.linear_acceleration.z, 3), gx=round(m.angular_velocity.x, 4), gy=round(m.angular_velocity.y, 4)), BE)
 if not ON_ROBOT:
   n.create_subscription(String, '/solo/debug', lambda m: w('solo_debug', d=json.loads(m.data)), BE)
+  for i in range(16):                       # duo_node's copy of each robot's command (vision id i), on the laptop's domain
+    n.create_subscription(Twist, f'/duo/robot{i}/cmd_vel', lambda m, i=i: w(f'duo_cmd_vel{i}', **tw(m)), BE)
 t = tp = time.time()
 try:
     while rclpy.ok():
