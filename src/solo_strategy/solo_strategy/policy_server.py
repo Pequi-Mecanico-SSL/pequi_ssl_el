@@ -13,7 +13,8 @@ Reply (JSON):   {"v": [vx, vy] attack-frame field velocity m/s, "w": rad/s (atta
 Two robots (a team bot such as duo_nk with d_role -1): "us" is a list of robots, [[x, y, th, vx, vy, seen], ...] in
 the team's slot order (duo_nk: slot 0 the keeper, slot 1 the field robot); the reply then has "v": [[vx, vy], ...],
 "w": [w, ...] and "mode" for each robot in the same order, and "team_size", the number of robots the bot plays (its TEAM_SIZE). A robot not seen (seen 0) is off the field for the policy
-and gets zero; in a stop each robot keeps --own-gap m from the other (centre to centre) as well as 0.6 m from the ball.
+and gets zero; in a stop no robot's target is nearer the ball than --stop-keep m (0.7), and each robot keeps --own-gap m
+(0.35) from the other (centres) as well as 0.6 m from the ball.
 States are sslrules.GameState values. The policy acts in RUNNING / FREE_KICK / KICKOFF / PENALTY; in STOP the robot
 goes to the team's restart pose (at --stop-speed at most) and keeps 0.6 m from the ball; in every other state it stands still."""
 import argparse
@@ -31,6 +32,7 @@ ap.add_argument("--params", default="{}", help="JSON overrides of the bot's PARA
 ap.add_argument("--port", type=int, default=47001)
 ap.add_argument("--robot", default="three_wheel")
 ap.add_argument("--stop-speed", type=float, default=0.6, help="top speed while the game is stopped, m/s (the limit is 0.75)")
+ap.add_argument("--stop-keep", type=float, default=0.7, help="two robots: in a stop no robot's target is nearer the ball than this, m (centres; the rule is 0.5 m + the robot's radius)")
 ap.add_argument("--own-gap", type=float, default=0.35, help="two robots: in a stop each keeps this far from the other, m (centres)")
 args = ap.parse_args()
 
@@ -135,6 +137,19 @@ def keep_apart(v, p, others, gap):
     return v
 
 
+def off_ball(target, ball, pos, keep):
+    """a stop target nearer the ball than keep (centres) moved out to keep, along the ball -> target line (the ball ->
+    robot line when the target is on the ball): stop_cmd's push off the ball then never has to fight the target"""
+    d = target - ball
+    dd = float(np.linalg.norm(d))
+    if dd >= keep:
+        return target
+    if dd < 1e-6:
+        d = pos - ball
+        dd = max(float(np.linalg.norm(d)), 1e-6)
+    return ball + d / dd * keep
+
+
 def step_team(q, mem):
     """several robots: the same states and stop rules as step(), per robot; a robot not seen gets zero"""
     st, us = int(q["state"]), q["us"]
@@ -157,7 +172,7 @@ def step_team(q, mem):
         for i, r in enumerate(us):
             if not seen[i]:
                 out["v"].append([0.0, 0.0]); out["w"].append(0.0); out["mode"].append("robot not seen"); continue
-            vv, w = stop_cmd({**q, "us": r}, tg[i], float(hd[i]))
+            vv, w = stop_cmd({**q, "us": r}, off_ball(tg[i], np.asarray(q["ball"][:2]), np.asarray(r[:2]), args.stop_keep), float(hd[i]))
             vv = keep_apart(vv, np.asarray(r[:2]), [o[:2] for j, o in enumerate(us) if j != i and seen[j]], args.own_gap)
             sp = float(np.linalg.norm(vv))
             if sp > args.stop_speed:
