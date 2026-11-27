@@ -114,6 +114,7 @@ class DuoNode(Node):
         self.still_since, self.still_pos = 0.0, (0.0, 0.0)
         self.last_team = 0
         self.mode, self.fails, self.n, self.seq, self.errors = '', 0, 0, 0, 0
+        self.answered = False       # until the server's first answer, every request asks it to start from fresh memory
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(0.02)
         self.server = ('127.0.0.1', int(g('server_port')))
@@ -281,12 +282,15 @@ class DuoNode(Node):
             q['place'] = [sx * float(gs.placement_x), float(gs.placement_y)]     # the server keeps the ball -> spot line off
         self.seq += 1
         q['seq'] = self.seq
+        if not self.answered:       # the server outlives this node (the page's restart): its memory holds times of the
+            q['reset'] = True       # old node's clock (duo_nk's release timers), which this node's clock restarted below
         try:
             self.sock.sendto(json.dumps(q).encode(), self.server)
             r = json.loads(self.sock.recv(65535))
             while r.get('seq') != self.seq:
                 r = json.loads(self.sock.recv(65535))
             self.fails = 0
+            self.answered = True
         except (OSError, ValueError):
             self.fails += 1
             try:
