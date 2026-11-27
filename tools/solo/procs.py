@@ -1,19 +1,22 @@
 """Which of our programs command the robot, and the strategy node's command line: one place for hq.py,
 auto_session.py and place_ball.py (standard library only, Linux /proc).
-    COMMANDERS            every tool here that publishes velocity commands on the command topic, and the strategy node.
+    COMMANDERS            every tool here that publishes velocity commands on the command topic, and the strategy nodes
+                          (solo_node, and duo_node, which commands two robots).
                           hq.py publishes too but is not listed: it is the field page the others report to (its own
                           driving is in its /state), and it refuses to drive while any of these runs.
     is_instance(argv, n)  argv is a running instance of n: the executable itself, or a python whose script is n
                           (interpreter options such as -u, -B, -X dev are skipped; python -c / -m runs no script)
-    is_launcher(argv)     `ros2 run solo_strategy solo_node` (the launcher around the node; it does not publish)
+    is_launcher(argv, nodes)   `ros2 run solo_strategy <node>` for a node in nodes (default solo_node): the launcher around
+                          the node; it does not publish
     process_table()       [(pid, argv)] of this computer's processes
     ancestors(pid)        that process and all its ancestors
     running(...)          the commanding programs that run now, outside a set of excluded pids
-    check_node_cmd(argv)  "" when argv is exactly the strategy node's own command line, else why not
+    check_node_cmd(argv, nodes)   "" when argv is exactly the command line of one of the strategy nodes in nodes (default
+                          solo_node), else why not
 """
 import os, re
 
-COMMANDERS = ("solo_node", "characterize.py", "series.py", "ram_series.py", "place_ball.py", "goto.py", "nudge.py",
+COMMANDERS = ("solo_node", "duo_node", "duo_check.py", "characterize.py", "series.py", "ram_series.py", "place_ball.py", "goto.py", "nudge.py",
               "frame_check.py")
 
 # the parameters solo_strategy/solo_node.py declares (tests/test_procs.py compares this with the node's source)
@@ -25,6 +28,15 @@ NODE_PARAMS = frozenset((
     "recover_frames", "recover_stop_speed", "recover_stale", "recover_gyro", "recover_map", "recover_map_module",
     "recover_min_rate", "recover_min_evidence", "odom_latency", "odom_wheel_lag", "wheels_topic", "imu_topic",
     "recover_states", "recover_source", "odom_topic", "odom_robot_lag"))
+
+# the parameters solo_strategy/duo_node.py declares (tests/test_procs.py compares this with the node's source)
+DUO_PARAMS = frozenset((
+    "team", "ids", "keeper", "domains", "cmd_topics", "speed_caps", "bench", "rate_hz", "pose_timeout", "latency", "predict",
+    "blind_slow", "blind_limit", "blind_floor", "gone_after", "off_margin", "pred_after", "pred_delay", "pred_accel",
+    "pred_vel_mix", "opp_hold", "pred_policy_vel", "speed_cap", "angular_cap", "ramp_fwd", "ramp_side", "side", "force_state",
+    "server_port", "cmd_reliable", "vision_prefix"))
+NODES = {"solo_node": NODE_PARAMS, "duo_node": DUO_PARAMS}
+STRATEGY_NODES = ("solo_node", "duo_node")
 
 PYTHON = re.compile(r"python3(\.\d+)?")
 PARAM = re.compile(r"([A-Za-z_][A-Za-z0-9_]*):=(.*)", re.S)
@@ -62,10 +74,10 @@ def is_instance(argv, name):
     return s is not None and os.path.basename(s) == name
 
 
-def is_launcher(argv):
-    """`ros2 run solo_strategy solo_node` (the launcher around the node; it does not publish itself)"""
+def is_launcher(argv, nodes=("solo_node",)):
+    """`ros2 run solo_strategy <node>`, node one of nodes (the launcher around the node; it does not publish itself)"""
     return (len(argv) > 4 and is_python(argv[0]) and os.path.basename(argv[1]) == "ros2"
-            and argv[2:5] == ["run", "solo_strategy", "solo_node"])
+            and argv[2:4] == ["run", "solo_strategy"] and argv[4] in nodes)
 
 
 def process_table():
@@ -101,11 +113,11 @@ def running(names=COMMANDERS, table=None, exclude=None):
     return sorted({n for pid, a in table if pid not in exclude for n in names if is_instance(a, n)})
 
 
-def check_node_cmd(argv):
+def check_node_cmd(argv, nodes=("solo_node",)):
     """"" when argv is exactly [<python>, <node>, "--ros-args", ("-p", "<name>:=<value>")*]: <python> an absolute path
     of an existing executable named python3 or python3.N, <node> an absolute path of an existing regular file named
-    solo_node, every name a parameter the node declares, no element beginning with -c or holding a newline or a NUL.
-    Else the reason it is refused."""
+    as one of nodes (solo_node, duo_node), every name a parameter that node declares, no element beginning with -c or
+    holding a newline or a NUL. Else the reason it is refused."""
     if not isinstance(argv, list): return "not a list"
     if len(argv) < 3: return "too short"
     if not all(isinstance(a, str) for a in argv): return "not all strings"
@@ -117,7 +129,8 @@ def check_node_cmd(argv):
     if not PYTHON.fullmatch(os.path.basename(py)): return f"interpreter not python3: {py[:80]!r}"
     if not (os.path.isfile(py) and os.access(py, os.X_OK)): return f"interpreter not an executable file: {py[:80]!r}"
     if not os.path.isabs(node): return f"node not an absolute path: {node[:80]!r}"
-    if os.path.basename(node) != "solo_node": return f"script not named solo_node: {node[:80]!r}"
+    name = os.path.basename(node)
+    if name not in nodes or name not in NODES: return f"script not named {' or '.join(nodes)}: {node[:80]!r}"
     if not os.path.isfile(node): return f"node not a regular file: {node[:80]!r}"
     if argv[2] != "--ros-args": return "the third element is not --ros-args"
     rest = argv[3:]
@@ -126,7 +139,7 @@ def check_node_cmd(argv):
         if rest[i] != "-p": return f"not a -p parameter: {rest[i][:40]!r}"
         m = PARAM.fullmatch(rest[i + 1])
         if not m: return f"not name:=value: {rest[i + 1][:40]!r}"
-        if m.group(1) not in NODE_PARAMS: return f"unknown parameter: {m.group(1)[:40]!r}"
+        if m.group(1) not in NODES[name]: return f"unknown parameter: {m.group(1)[:40]!r}"
     return ""
 
 

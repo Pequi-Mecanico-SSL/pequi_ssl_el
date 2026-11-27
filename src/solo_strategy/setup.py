@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer='Gustavo',
     maintainer_email='gustavomoura@discente.ufg.br',
-    description='One-robot strategy node',
+    description='Strategy nodes: one robot (solo_node), two robots (duo_node)',
     license='MIT',
-    entry_points={'console_scripts': ['solo_node = solo_strategy.solo_node:main']},
+    entry_points={'console_scripts': ['solo_node = solo_strategy.solo_node:main', 'duo_node = solo_strategy.duo_node:main']},
 )

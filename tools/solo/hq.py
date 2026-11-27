@@ -34,6 +34,10 @@ arguments it had; the policy server keeps running in between, so the restart tak
 node only from a saved line of exactly the node's form (procs.check_node_cmd: an absolute python3, an absolute
 solo_node, --ros-args, -p pairs of the node's own parameters), and not while another commanding program runs (409);
 a refusal and its reason go to the note and the event log.
+Two robots (tools/solo/run_duo.sh, strategy node duo_node): the button stops and restarts duo_node the same way (both
+robots get zeros when it stops). The page's own robot is SOLO_ROBOT_INDEX (run_duo.sh starts the connector with our
+colour's count 16, so set it to the keeper's vision id); the other robot is drawn as <colour><vision id>. A click
+drives only the robot that listens on the page's command topic in the page's ROS domain.
 Speed: the slider (at most --max-speed, default 1.5 m/s); the commanded velocity is ramped at 1.5 m/s2.
 "click = place ball" (the mode button; "click = drive robot" is the default): a click sets the spot where the ball
 should go and the robot pushes it there with BallPlacer from place_ball.py (rough 0.15 m or precise 0.05 m; the slider
@@ -227,15 +231,16 @@ def others_running():
     return procs.running(COMMANDERS)
 
 RUN = os.environ.get("SOLO_RUN_DIR", "/tmp/solo_run"); CMDF = os.path.join(RUN, "solo.cmd")
+NODES = procs.STRATEGY_NODES                             # solo_node (one robot) or duo_node (two robots)
 def strategy_procs():
     """pids of the strategy node (and of the launcher around it) on this computer"""
-    return [pid for pid, a in procs.process_table() if procs.is_instance(a, "solo_node") or procs.is_launcher(a)]
+    return [pid for pid, a in procs.process_table() if any(procs.is_instance(a, n) for n in NODES) or procs.is_launcher(a, NODES)]
 def strategy_off():
     """stop the node (SIGINT, then SIGTERM); its command line is saved first. A failure to save does not keep it
     from stopping the node -> (stopped, note)"""
     why = ""
     for pid, argv in procs.process_table():               # remember how the node itself was started
-        if procs.is_instance(argv, "solo_node") and len(argv) > 1 and os.path.basename(argv[1]) == "solo_node":
+        if len(argv) > 1 and os.path.basename(argv[1]) in NODES and procs.is_instance(argv, os.path.basename(argv[1])):
             try:
                 os.makedirs(RUN, exist_ok=True)
                 with open(CMDF, "w") as f: json.dump(argv, f)
@@ -253,7 +258,7 @@ def strategy_on():
     try:
         with open(CMDF) as f: argv = json.load(f)
     except (OSError, ValueError) as e: return False, f"no saved command line ({type(e).__name__})"
-    why = procs.check_node_cmd(argv)
+    why = procs.check_node_cmd(argv, NODES)
     if why: return False, "saved command line refused: " + why
     try:
         log = open(os.path.join(RUN, "solo.log"), "a")
@@ -265,7 +270,15 @@ def strategy_on():
     return True, ""
 STRAT = ["on" if strategy_procs() else ("off" if os.path.exists(CMDF) else "not started")]
 
-rclpy.init(); node = Node("solo_hq")
+def _stop_signal(signum, frame):
+    raise KeyboardInterrupt
+try:                                                     # without rclpy's signal handlers: they shut the context down
+    from rclpy.signals import SignalHandlerOptions       # before main()'s final zeros could be published
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _stop_signal); signal.signal(signal.SIGTERM, _stop_signal)
+except ImportError:
+    rclpy.init()
+node = Node("solo_hq")
 pub = node.create_publisher(Twist, os.environ.get("SOLO_CMD_TOPIC", "/cmd_vel"), qos_profile_sensor_data)
 def on_us(m):
     with LOCK: S["us"], S["us_t"] = (m.x, m.y, m.theta), now()
@@ -294,7 +307,7 @@ node.create_subscription(String, "/solo/debug", on_debug, 10)
 if GameState is not None:
     node.create_subscription(GameState, "/referee/game_state", on_ref, 10)
 for tm in ("blue", "yellow"):
-    for i in range(6):
+    for i in range(16):                                  # every topic number the connector can have (with a count of 16 it is the vision id)
         if (tm, i) != (TEAM, IDX):
             node.create_subscription(Pose2D, f"/vision/poses/{tm}/robot{i}", on_other(f"{tm}{i}"), 20)
 
@@ -365,7 +378,7 @@ def control():
             event("vision", f"our robot seen again at ({u0[0]:+.2f}, {u0[1]:+.2f}) after {now() - lost:.1f} s"); lost = None
         if now() - t_ps > 1.0:                                        # who else commands the robot, once a second
             t_ps = now(); BUSY[0] = others_running()
-            STRAT[0] = "on" if "solo_node" in BUSY[0] else ("off" if os.path.exists(CMDF) else "not started")
+            STRAT[0] = "on" if set(NODES) & set(BUSY[0]) else ("off" if os.path.exists(CMDF) else "not started")
             if BUSY[0]:
                 with LOCK:
                     if S["target"] is not None: S["target"] = None; note("target dropped: " + ", ".join(BUSY[0]) + " is running")
@@ -577,7 +590,7 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/strategy":
             ok, on = check_flag(b, "on")
             if not ok: return self.refuse(400, "on must be true or false")
-            busy = [n for n in others_running() if n != "solo_node"]
+            busy = [n for n in others_running() if n not in NODES]
             if on and busy:                                           # the node would command the robot with them
                 why = "strategy not started: " + ", ".join(busy) + " is running"
                 with LOCK: event("page", why); S["note"] = why
@@ -585,7 +598,7 @@ class H(BaseHTTPRequestHandler):
             with LOCK: S["target"] = None; place_close(now(), "stopped: strategy switched")
             try: ok, why = strategy_on() if on else strategy_off()
             except Exception as e: ok, why = False, f"{type(e).__name__}: {e}"
-            BUSY[0] = others_running(); STRAT[0] = "on" if "solo_node" in BUSY[0] else ("off" if os.path.exists(CMDF) else "not started")
+            BUSY[0] = others_running(); STRAT[0] = "on" if set(NODES) & set(BUSY[0]) else ("off" if os.path.exists(CMDF) else "not started")
             text = ("strategy " + STRAT[0]) if ok else "strategy switch failed"
             if why: text += ": " + why
             with LOCK: event("page", text); S["note"] = text

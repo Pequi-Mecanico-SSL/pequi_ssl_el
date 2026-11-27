@@ -129,3 +129,33 @@ def test_run_child_forwards_a_stop_and_gives_the_child_its_grace():
         rc, out, h = P.run_child(["x"], lambda: signal.SIGINT if clk.t >= 1.0 else None, popen=lambda *a, **k: child, clock=clk, sleep=clk.sleep)
         assert h == how and child.sigs == sigs and '"interrupted": true' in out
         if after is None: assert 2.5 <= clk.t <= 2.7                       # 1.5 s of grace, not 0.25 s
+
+
+def _declared(path):
+    names = set()
+    for n in ast.walk(ast.parse(open(path).read())):
+        if isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+            f = n.func
+            if (isinstance(f, ast.Name) and f.id == "d") or (isinstance(f, ast.Attribute) and f.attr == "declare_parameter"):
+                names.add(n.args[0].value)
+    return names
+
+
+def test_duo_params_match_the_duo_nodes_declare_parameter_calls():
+    names = _declared(os.path.join(REPO, "src", "solo_strategy", "solo_strategy", "duo_node.py"))
+    assert len(names) > 20 and names == set(P.DUO_PARAMS)
+    assert "duo_node" in P.COMMANDERS and set(P.STRATEGY_NODES) == set(P.NODES)
+
+
+def test_check_node_cmd_for_the_duo_node(tmp_path):
+    (tmp_path / "bin").mkdir(); (tmp_path / "lib").mkdir()
+    py = tmp_path / "bin" / "python3"; py.write_text("#!/bin/sh\n"); py.chmod(0o755)
+    duo = tmp_path / "lib" / "duo_node"; duo.write_text("x")
+    solo = tmp_path / "lib" / "solo_node"; solo.write_text("x")
+    line = [str(py), str(duo), "--ros-args", "-p", "team:=yellow", "-p", "ids:=[1, 3]", "-p", "domains:=[77, 78]"]
+    assert P.check_node_cmd(line, P.STRATEGY_NODES) == ""
+    assert "not named" in P.check_node_cmd(line)                                   # the default stays solo_node only
+    assert "unknown parameter" in P.check_node_cmd(line[:3] + ["-p", "robot_index:=0"], P.STRATEGY_NODES)   # solo_node's, not duo_node's
+    assert "unknown parameter" in P.check_node_cmd([str(py), str(solo), "--ros-args", "-p", "ids:=[1]"], P.STRATEGY_NODES)
+    assert P.is_launcher(["/usr/bin/python3", "/opt/ros/humble/bin/ros2", "run", "solo_strategy", "duo_node"], P.STRATEGY_NODES)
+    assert not P.is_launcher(["/usr/bin/python3", "/opt/ros/humble/bin/ros2", "run", "solo_strategy", "duo_node"])
