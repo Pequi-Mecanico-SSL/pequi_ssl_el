@@ -126,3 +126,18 @@ def test_node_declares_what_it_documents():
     for name in ("ids", "keeper", "domains", "cmd_topics", "speed_caps", "bench", "gone_after", "off_margin"):
         assert name in declared
     assert "/robot{vid}'" in src and "_robot_count:=16" in src
+
+
+@pytest.mark.parametrize("bad", ["vfx", "vfy", "w", "th"])
+def test_a_non_finite_policy_answer_gives_zero_not_a_growing_command(bad):
+    r = D.Robot(1)
+    for k in range(30):
+        r.prev_vf, r.last_vf = r.last_vf, (0.0, 0.0)
+        a = dict(vfx=0.5, vfy=0.2, w=1.0, th=0.3)
+        if k >= 10:
+            a[bad] = float("nan") if k % 2 else float("inf")
+        c = D.body_command(r, a["vfx"], a["vfy"], a["w"], a["th"], 1.0, 1.5, 4.0, 0.1, (1.7, 1.5), 1 / 30)
+        if k >= 10:
+            assert c == (0.0, 0.0, 0.0) and r.last_vf == (0.0, 0.0) and r.last_w == 0.0
+        else:
+            assert all(math.isfinite(v) for v in c) and c != (0.0, 0.0, 0.0)

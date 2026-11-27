@@ -107,7 +107,11 @@ def ramp(prev, tgt, a, dt):
 def body_command(robot, vfx, vfy, w, th, scale, speed_cap, angular_cap, latency, ramps, dt):
     """field-frame velocity (vfx, vfy) and turn rate w for a robot at heading th -> its body-frame (x, y, w), capped,
     turned into the frame the robot will have `latency` s from now, and ramped along its own axes; updates the
-    robot's last_vf / last_w. The same arithmetic as solo_node's play path."""
+    robot's last_vf / last_w. The same arithmetic as solo_node's play path, except that a non-finite input gives zero:
+    the caps and the ramp would turn a NaN into a finite command (min / max keep the bound) that grows every tick."""
+    if not all(math.isfinite(v) for v in (vfx, vfy, w, th, scale)):
+        robot.last_vf, robot.last_w = (0.0, 0.0), 0.0
+        return 0.0, 0.0, 0.0
     sp, cap = math.hypot(vfx, vfy), speed_cap * scale
     if sp > cap:
         vfx, vfy = vfx * cap / sp, vfy * cap / sp
