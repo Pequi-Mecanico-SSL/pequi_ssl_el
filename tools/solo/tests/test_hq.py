@@ -514,3 +514,14 @@ def test_coverage_underlay(hq, monkeypatch):
     assert code == 200 and json.loads(body)["ok"] is False
     code, _ = get(hq, "/map", headers={"Host": "other.example"})
     assert code == 403
+
+
+def test_exit_zeros_only_when_no_other_program_commands_the_robot(hq, monkeypatch):
+    monkeypatch.setattr(hq.time, "sleep", lambda s: None)
+    hq.W.busy = ["solo_node"]; hq.W.sent.clear(); hq.exit_zeros()
+    assert hq.W.sent == []                                         # the strategy drives: the page's zeros would cut in
+    hq.W.busy = []; hq.exit_zeros()
+    assert len(hq.W.sent) == 10 and all(c[1:] == (0.0, 0.0, 0.0) for c in hq.W.sent)
+    def broken(): raise OSError("no /proc")
+    hq.others_running = broken; hq.W.sent.clear(); hq.exit_zeros()
+    assert len(hq.W.sent) == 10                                    # unsure who runs: zeros

@@ -656,7 +656,15 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        for _ in range(10): send(0, 0, 0); time.sleep(0.02)
+        exit_zeros()
+
+def exit_zeros():
+    """zeros at exit, unless another program commands the robot now: the page does not drive while one runs, and its
+    zeros would cut into that program's commands (a page restarted during a match)"""
+    try: busy = others_running()
+    except Exception: busy = []
+    if busy: return
+    for _ in range(10): send(0, 0, 0); time.sleep(0.02)
 
 if __name__ == "__main__":
     main()
