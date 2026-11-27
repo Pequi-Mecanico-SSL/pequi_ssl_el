@@ -149,7 +149,7 @@ def test_page_set_needs_unlock(hqp):
 def test_page_refusals(hqp):
     p = hqp.F.port
     assert post(hqp, "/lock", {"on": False}) == 200
-    for body in ({"set": {"a_nfv": 1}}, {"port": p + 1, "set": {"a_nfv": 1}}, {"port": True, "set": {"a_nfv": 1}},
+    for body in ({"set": {"a_nfv": 1}}, {"port": p + 1, "set": {"a_nfv": 1}}, {"port": True, "set": {"a_nfv": 1}}, {"port": float(p), "set": {"a_nfv": 1}},
                  {"port": p, "set": {"a_nfv": "1"}}, {"port": p, "set": {"a_nfv": None}}, {"port": p}, {"port": p, "profile": False}):
         assert post(hqp, "/params", body) == 400, body
     assert post(hqp, "/params", None, raw=b'{"port": %d, "set": {"a_nfv": NaN}}' % p) == 400
@@ -199,6 +199,12 @@ def test_real_server_live_set():
             r = ask({"cfg": "set", "set": {"a_nfv": bad}})
             assert "error" in r and r["now"]["a_nfv"] == 0.2
         assert "error" in ask({"cfg": "set", "set": {"d_role": 0}})
+        r = ask({"cfg": "set", "set": {"a_nfv": 1.0, "nk_da_run": 0.05}})   # out of range: refused whole, range in the text
+        assert "nk_da_run 0.05 outside [0.1, 0.6]" in r["error"] and r["now"]["a_nfv"] == 0.2 and r["limits"]["nk_da_run"] == [0.1, 0.6]
+        r = ask({"cfg": "set", "set": {"nk_da_run": 0.1, "nk_v": 1.5}})     # the ends are inside
+        assert "error" not in r and r["now"]["nk_da_run"] == 0.1
+        r = ask({"cfg": "profile", "keys": ["nk_da_run", "nk_v"]})          # back to profile: never refused
+        assert "error" not in r and r["now"]["nk_da_run"] == float(prof["nk_da_run"])
         tick(3.0, 0.0, reset=True)                                     # a node restart: the values stay
         assert ask({"cfg": "get"})["now"]["a_nfv"] == 0.2
         r = ask({"cfg": "profile"}); assert r["changed"] == [] and r["now"]["a_nfv"] == float(prof["a_nfv"])

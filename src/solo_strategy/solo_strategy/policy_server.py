@@ -22,7 +22,7 @@ parameters now in force, never with a robot command, and leaves the strategy's m
 a traced float32 scalar of the compiled program, so a new value takes effect on the next tick with no recompile (the
 reply's "compiles" counts the program's compiled variants: it does not change). A set is refused whole ("error",
 nothing changed) unless every key is a parameter of the bot (not d_role: one robot or the team is fixed at start)
-and every value a finite number. The values in force
+and every value a finite number inside its range where LIMITS has one ("limits" in the reply). The values in force
 last as long as this process: a node restart or a request's reset keeps them; a new start of the server is back to
 --params. Reply: {"bot", "profile": the --params keys at their start values, "now": the same keys and every changed
 one at the values in force, "changed": [keys], "default": the bot's own value of each changed key not in --params,
@@ -235,6 +235,11 @@ def g7(x):
 
 NOW0 = {k: g7(v) for k, v in P0.items()}                               # Python floats: no device read per request
 NOW = dict(NOW0)                                                        # the values in force, as P holds them
+# the range a value set live must lie in (inclusive; a value outside refuses the whole set; "back to profile" is never
+# checked); read from the bots' guards, widened to every default and profile value in use (nk_da_run 0.12)
+LIMITS = dict(nk_fm=(-0.3, 0.1), nk_da_a=(0.5, 3.0), d_vn=(0.0, 1.0), d_rn=(0.3, 1.0), nk_od=(0.2, 1.0), d_od=(0.15, 1.0),
+              nk_da=(0.3, 0.8), nk_da_run=(0.1, 0.6), d_own=(0.0, 0.5), d_kr=(0.65, 1.2), nk_v=(0.0, 1.5), a_tau=(0.05, 5.0),
+              lu_c0=(0.01, 1.0), lu_c1=(0.01, 1.0), a_vk=(0.3, 2.0))
 FIXED = {"d_role"}           # what the server plays (one robot or the team) is set at start: run_duo.sh checks it there
 
 
@@ -256,7 +261,7 @@ def cfg_view(error=None):
                 rep[k] = round(float(np.asarray(v)[0]), 3)                # one host copy, no device op
     out = dict(bot=args.bot, profile=PROFILE, now={k: NOW[k] for k in sorted(set(PROFILE) | set(changed))},
                changed=changed, default={k: g7(mod.PARAMS[k]) for k in changed if k not in PROFILE}, report=rep,
-               keys=sorted(P), compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team)))
+               keys=sorted(P), limits={k: list(v) for k, v in LIMITS.items() if k in P}, compiles=sum(f._cache_size() for f in (act, act_team, stop_pose, stop_pose_team)))
     if error:
         out["error"] = error
     return out
@@ -282,6 +287,10 @@ def cfg_request(q):
         bad = [k for k, v in vals.items() if v is None]
         if bad:
             return cfg_view(f"not finite numbers: {sorted(bad)}")
+        bad = [f"{k} {v:g} outside [{LIMITS[k][0]:g}, {LIMITS[k][1]:g}]" for k, v in sorted(vals.items())
+               if k in LIMITS and not LIMITS[k][0] <= v <= LIMITS[k][1]]
+        if bad:
+            return cfg_view("out of range: " + "; ".join(bad))
         upd = vals
     elif op == "profile":
         keys = q.get("keys", list(P))

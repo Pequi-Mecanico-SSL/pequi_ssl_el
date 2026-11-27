@@ -392,7 +392,7 @@ def params_post(b):
     """POST /params: (code, reply); the change and the server's answer go to the event log"""
     if not isinstance(b, dict) or "port" not in b: return 400, dict(error="bad request: port missing")
     port = b["port"]
-    if isinstance(port, bool) or port not in PPORTS: return 400, dict(error=f"not a policy server port of this page: {port!r}")
+    if type(port) is not int or port not in PPORTS: return 400, dict(error=f"not a policy server port of this page: {port!r}")
     req, why = policy_cfg.check_request({k: v for k, v in b.items() if k != "port"})
     if req is None: return 400, dict(error=why)
     was = (PV.get(port) or {}).get("now", {})
@@ -571,7 +571,7 @@ function ppdraw(force){if(!ppOn)return;const ae=document.activeElement;if(!force
   h+='<div id="pr_'+s.port+'" style="color:#9cf">'+esc(rtxt(s.report||{}))+'</div><div style="color:#aaa">'+s.changed.length+' changed'+(s.error?' | '+esc(s.error):'')+'</div><table style="border-collapse:collapse">';
   h+='<tr style="color:#888"><td>key</td><td>profile</td><td>in force</td><td>new</td><td></td></tr>';
   for(const k in s.now){const ch=s.changed.includes(k),pv=k in s.profile?s.profile[k]:(s.default||{})[k];
-   h+='<tr style="'+(ch?'background:#4a3000':'')+'"><td>'+(ch?'* ':'')+esc(k)+'</td><td>'+pv+'</td><td style="font-weight:bold;color:'+(ch?'#fb6':'#ddd')+'">'+s.now[k]+'</td><td><input id="pv_'+s.port+'_'+esc(k)+'" size="6" '+(lk?'disabled':'')+'></td><td>'
+   h+='<tr style="'+(ch?'background:#4a3000':'')+'"><td>'+(ch?'* ':'')+esc(k)+'</td><td>'+pv+(s.limits&&s.limits[k]?' <span style="color:#888">['+s.limits[k][0]+', '+s.limits[k][1]+']</span>':'')+'</td><td style="font-weight:bold;color:'+(ch?'#fb6':'#ddd')+'">'+s.now[k]+'</td><td><input id="pv_'+s.port+'_'+esc(k)+'" size="6" '+(lk?'disabled':'')+'></td><td>'
     +'<button '+(lk?'disabled':'')+' onclick="ppapply('+s.port+',[\''+esc(k)+'\'])">apply</button>'+(ch?'<button '+(lk?'disabled':'')+' onclick="ppsend({port:'+s.port+',profile:[\''+esc(k)+'\']})">back</button>':'')+'</td></tr>'}
   h+='</table><button '+(lk?'disabled':'')+' onclick="ppapply('+s.port+','+esc(JSON.stringify(Object.keys(s.now)))+')">apply all typed</button> <button '+(lk?'disabled':'')+' onclick="ppsend({port:'+s.port+',profile:true})">all back to profile</button>'
    +'<div style="margin-top:4px">add <input id="pa_'+s.port+'" list="pk_'+s.port+'" size="12" '+(lk?'disabled':'')+'> = <input id="pav_'+s.port+'" size="6" '+(lk?'disabled':'')+'> <button '+(lk?'disabled':'')+' onclick="ppadd('+s.port+')">set</button><datalist id="pk_'+s.port+'">'+(s.keys||[]).map(k=>'<option value="'+esc(k)+'">').join('')+'</datalist></div>'}
