@@ -23,6 +23,7 @@ top-k most-persistently-seen vision ids (presence counter with decay) map to
 robot0..robot<k-1> per color, ordered by vision id.
 """
 import socket
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -76,8 +77,9 @@ class SSLVisionProtobufToROS(Node):
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 128)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
         self.sock.bind(('', vision_port))
-        mreq = socket.inet_aton(vision_ip) + socket.inet_aton('0.0.0.0')
-        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        self.mreq = socket.inet_aton(vision_ip) + socket.inet_aton('0.0.0.0')
+        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, self.mreq)
+        self.last_packet = self.last_join = time.monotonic()
         # Non-blocking: each tick drains the queue and publishes from the
         # freshest packets. A blocking one-packet-per-tick read falls behind
         # whenever the source outpaces the timer (grSim: ~235 pkt/s vs 60 Hz)
@@ -149,6 +151,20 @@ class SSLVisionProtobufToROS(Node):
             msg.theta = -msg.theta
         publishers[index].publish(msg)
 
+    def rejoin_if_silent(self):
+        """A network without an IGMP querier stops forwarding the group after a while: join again."""
+        now = time.monotonic()
+        if now - self.last_packet < 2.0 or now - self.last_join < 2.0:
+            return
+        self.last_join = now
+        try:
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, self.mreq)
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, self.mreq)
+        except OSError:
+            pass
+        self.get_logger().warn('no vision packets, joining the multicast group again',
+                               throttle_duration_sec=10.0)
+
     def get_protobuf_and_publish(self):
         # Drain everything queued since the last tick; process each packet so
         # the presence counters see all detections, publishing each packet as it is processed (the
@@ -168,7 +184,9 @@ class SSLVisionProtobufToROS(Node):
                     f'Failed to parse vision packet: {e}',
                     throttle_duration_sec=5.0)
         if not packets:
+            self.rejoin_if_silent()
             return
+        self.last_packet = time.monotonic()
 
         for packet in packets:
             # field geometry (mm -> m)
