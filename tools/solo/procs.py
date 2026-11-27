@@ -34,7 +34,7 @@ DUO_PARAMS = frozenset((
     "team", "ids", "keeper", "domains", "cmd_topics", "speed_caps", "bench", "rate_hz", "pose_timeout", "latency", "predict",
     "blind_slow", "blind_limit", "blind_floor", "gone_after", "off_margin", "pred_after", "pred_delay", "pred_accel",
     "pred_vel_mix", "opp_hold", "pred_policy_vel", "speed_cap", "angular_cap", "ramp_fwd", "ramp_side", "side", "force_state",
-    "server_port", "cmd_reliable", "vision_prefix"))
+    "server_port", "cmd_reliable", "vision_prefix", "live_file", "stack_topic"))
 NODES = {"solo_node": NODE_PARAMS, "duo_node": DUO_PARAMS}
 STRATEGY_NODES = ("solo_node", "duo_node")
 

@@ -34,6 +34,9 @@ ap.add_argument("--port", type=int, default=47001)
 ap.add_argument("--robot", default="three_wheel")
 ap.add_argument("--stop-speed", type=float, default=0.6, help="top speed while the game is stopped, m/s (the limit is 0.75)")
 ap.add_argument("--stop-keep", type=float, default=0.7, help="two robots: in a stop no robot's target is nearer the ball than this, m (centres; the rule is 0.5 m + the robot's radius)")
+ap.add_argument("--keep", default="", help="comma-separated top-level memory keys a request's reset leaves as they are (game-long "
+                "knowledge the node's restart must not erase, e.g. duo_att's vo_m,vb_m,om: their fastest speeds seen in play); "
+                "a restart of this server starts them over")
 ap.add_argument("--own-gap", type=float, default=0.35, help="two robots: in a stop each keeps this far from the other, m (centres)")
 args = ap.parse_args()
 
@@ -199,6 +202,15 @@ def step_team(q, mem):
 
 
 mem0 = mod.init_mem(1, N)
+KEEP = [k for k in args.keep.split(",") if k]
+missing = [k for k in KEEP if not isinstance(mem0, dict) or k not in mem0]
+if missing:
+    raise SystemExit(f"--keep: {missing} are not memory keys of {args.bot}")
+
+
+def reset_mem(mem):
+    """the start memory, with the --keep keys carried over from mem"""
+    return {**mem0, **{k: mem[k] for k in KEEP}} if KEEP else mem0
 ACTS = (int(GS.RUNNING), int(GS.FREE_KICK), int(GS.KICKOFF), int(GS.PENALTY))
 STOPS = (int(GS.STOP), int(GS.BALL_PLACEMENT))
 
@@ -252,7 +264,7 @@ while True:
     try:
         q = json.loads(data)
         if q.get("reset"):
-            mem = mem0
+            mem = reset_mem(mem)
         out, mem = (step_team if is_team(q) else step)(q, mem)
         if is_team(q):
             out["team_size"] = TEAM_SIZE                        # the client checks that the bot plays its number of robots

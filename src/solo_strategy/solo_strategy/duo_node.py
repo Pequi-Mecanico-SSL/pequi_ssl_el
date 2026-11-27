@@ -17,6 +17,13 @@ Robots (start-up parameters, nothing is assumed about them):
     bench       []       live: vision ids that get zero and are off the field for the policy (a card, a robot taken
                          off): `ros2 param set /duo_strategy bench [3]`, back with `... bench "[]"`
                          (an integer array parameter: give [-1] for "nobody" if the empty list is refused)
+    live_file   ''       a file where the live keeper and bench are kept (run_duo.sh: /tmp/solo_run/duo_live.json); a
+                         node started with the same team and ids takes them from it (the page's STRATEGY button
+                         restarts the node with its start-up command line). '' = not kept
+    stack_topic '/wheels/state'   every 2 s the publishers of this topic are counted on each robot's domain (each robot
+                         control stack, old or drive node, publishes it once): two on one domain = two robots hear the
+                         same commands, and the robots of that domain get zero until it is one again; none = a warning
+                         in the mode line only. '' = not checked
 Subscribes (on this process's domain):
     /vision/poses/<team>/robot<id>    our robots BY VISION ID: the vision connector must run with
                                       <team>_robot_count:=16, so that its topic number is the vision id itself (with a
@@ -52,7 +59,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from std_msgs.msg import String
 
-from solo_strategy.duo import Limits, Robot, body_command, check_ids, slots
+from solo_strategy.duo import Limits, Robot, body_command, check_ids, load_live, save_live, slots, stack_problems
 from solo_strategy.tracking import Track, wrap
 
 HALT, STOP, RUNNING, FREE_KICK, KICKOFF, PENALTY, TIMEOUT, BALL_PLACEMENT = 1, 2, 3, 4, 5, 6, 7, 8
@@ -76,6 +83,7 @@ class DuoNode(Node):
         d('pred_policy_vel', 'model')
         d('speed_cap', 1.0); d('angular_cap', 4.0); d('ramp_fwd', 1.7); d('ramp_side', 1.5); d('side', 'auto'); d('force_state', '')
         d('server_port', 47001); d('cmd_reliable', False); d('vision_prefix', '/vision/poses')
+        d('live_file', ''); d('stack_topic', '/wheels/state')
         g = lambda n: self.get_parameter(n).value
         self.own_domain = own_domain
         self.team = g('team')
@@ -90,6 +98,15 @@ class DuoNode(Node):
         why = check_ids(self.ids, self.domains, self.topics, self.keeper, self.bench, own_domain)
         if why:
             raise ValueError(why)
+        self.live_file = g('live_file')
+        live = load_live(self.live_file, self.team, self.ids, self.domains, self.topics, own_domain)
+        if live is not None and live != (self.keeper, self.bench):
+            self.get_logger().info(f"keeper and bench from {self.live_file} (set live before a restart): keeper id "
+                                   f"{self.keeper} -> {live[0]}, bench {sorted(self.bench)} -> {sorted(live[1])}")
+            self.keeper, self.bench = live
+        save_live(self.live_file, self.team, self.ids, self.keeper, self.bench)
+        self.stack_topic = g('stack_topic')
+        self.stacks, self.blocked, self.stack_note = {}, set(), ''
         caps = [float(v) for v in g('speed_caps') if float(v) > 0.0]
         if caps and len(caps) != len(self.ids):
             raise ValueError(f"speed_caps must give one cap per robot ({len(self.ids)}) or none, not {caps}")
@@ -121,7 +138,7 @@ class DuoNode(Node):
         qos = 10 if g('cmd_reliable') else qos_profile_sensor_data
         # each robot's command publisher, on the robot's own domain: a context (one DDS participant) per other domain.
         # Publishing needs no executor, so these nodes are never spun.
-        self.contexts, self.pub = [], {}
+        self.contexts, self.pub, self.cmd_node = [], {}, {}
         extra = {}
         for vid, dom, topic in zip(self.ids, self.domains, self.topics):
             if dom == -1 or dom == own_domain:
@@ -134,6 +151,7 @@ class DuoNode(Node):
                     self.contexts.append(ctx)
                 node = extra[dom]
             self.pub[vid] = node.create_publisher(Twist, topic, qos)
+            self.cmd_node[vid] = (own_domain if dom == -1 else dom, node)
         self.extra_nodes = list(extra.values())
         self.echo = {vid: self.create_publisher(Twist, f'/duo/robot{vid}/cmd_vel', qos_profile_sensor_data) for vid in self.ids}
         self.dbg = self.create_publisher(String, '/solo/debug', 10)
@@ -169,7 +187,24 @@ class DuoNode(Node):
         if keeper != self.keeper or bench != self.bench:
             self.get_logger().info(f"keeper id {self.keeper} -> {keeper}, bench {sorted(self.bench)} -> {sorted(bench)}")
         self.keeper, self.bench = keeper, bench
+        try:
+            save_live(self.live_file, self.team, self.ids, keeper, bench)
+        except OSError as e:
+            self.get_logger().error(f"keeper/bench not saved to {self.live_file} ({e}): a restart of the node forgets them")
         return SetParametersResult(successful=True)
+
+    def check_stacks(self):
+        """count the robot control stacks on each robot's domain (stack_topic publishers)"""
+        if not self.stack_topic:
+            return
+        counts = {}
+        for dom, node in self.cmd_node.values():
+            counts[dom] = node.count_publishers(self.stack_topic)
+        blocked, note = stack_problems(counts)
+        if counts != self.stacks:
+            (self.get_logger().error if blocked else self.get_logger().info)(
+                f"robot stacks ({self.stack_topic} publishers) per domain: {counts}" + (f"; {note}" if note else ''))
+        self.stacks, self.blocked, self.stack_note = counts, blocked, note
 
     def now(self):
         return time.monotonic() - self.t0
@@ -183,8 +218,19 @@ class DuoNode(Node):
         for r in self.robots.values():
             r.prev_vf, r.last_vf = r.last_vf, (0.0, 0.0)          # every path that sends zero restarts the ramp
         cmds = {vid: (0.0, 0.0, 0.0) for vid in self.ids}
+        if self.n % 60 == 0:
+            try:
+                self.check_stacks()
+            except Exception as e:                                # the check must not stop the node
+                self.stack_note = f"stack check failed: {type(e).__name__}"
         try:
             info = self.decide(now, cmds)
+            for vid in self.ids:                                  # two robots hear this domain: neither is driven
+                if self.cmd_node[vid][0] in self.blocked:
+                    cmds[vid] = (0.0, 0.0, 0.0)
+                    self.robots[vid].last_vf, self.robots[vid].last_w = (0.0, 0.0), 0.0
+            if self.stack_note:
+                info = dict(info, mode=f"{info['mode']} | {self.stack_note}", stacks={str(k): v for k, v in self.stacks.items()})
         except Exception as e:                                    # a bug must not leave a command standing
             cmds = {vid: (0.0, 0.0, 0.0) for vid in self.ids}
             for r in self.robots.values():

@@ -156,3 +156,49 @@ def check_ids(ids, domains, topics, keeper, bench, own_domain):
     if any(b not in ids for b in bench):
         return f"bench {bench} names a robot that is not one of ids {ids}"
     return ""
+
+
+def load_live(path, team, ids, domains, topics, own_domain):
+    """the keeper and bench a node with the same team and ids saved in `path` (save_live) -> (keeper, bench) or None
+    (no file, unreadable, another set-up, or not consistent with check_ids). A restart of the node (the page's STRATEGY
+    button) then goes on with the roles set live instead of the start-up ones."""
+    import json
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            s = json.load(f)
+        if s.get('team') != team or [int(i) for i in s.get('ids', [])] != [int(i) for i in ids]:
+            return None
+        keeper, bench = int(s['keeper']), set(int(b) for b in s.get('bench', []))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if check_ids(ids, domains, topics, keeper, bench, own_domain):
+        return None
+    return keeper, bench
+
+
+def save_live(path, team, ids, keeper, bench):
+    """write the live keeper and bench for load_live (atomically: a node reading it never sees half a file)"""
+    import json
+    import os
+    if not path:
+        return
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, 'w') as f:
+        json.dump(dict(team=team, ids=[int(i) for i in ids], keeper=int(keeper), bench=sorted(int(b) for b in bench)), f)
+    os.replace(tmp, path)
+
+
+def stack_problems(counts):
+    """{ROS domain: robot control stacks heard there (publishers of the robots' wheels/state)} -> (domains whose
+    robots must get zero, warning text). Two stacks on one domain means two robots hear the same commands: neither
+    is driven. None on a domain is only a warning (a stack still starting, or a simulator without robot stacks)."""
+    two = sorted(d for d, n in counts.items() if n > 1)
+    none = sorted(d for d, n in counts.items() if n == 0)
+    txt = []
+    if two:
+        txt.append(f"{', '.join(f'{counts[d]} robot stacks on domain {d}' for d in two)}: zero to the robot(s) on it")
+    if none:
+        txt.append(f"no robot stack heard on domain {', '.join(str(d) for d in none)}")
+    return set(two), '; '.join(txt)

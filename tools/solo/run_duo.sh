@@ -1,6 +1,7 @@
 #!/bin/bash
-# Two-robot match setup on the real field: policy server (duo_nk, both robots) + vision connector + referee connector
-# + one strategy node (duo_node) that sends each robot its own commands on the robot's own ROS domain.
+# Two-robot match setup on the real field: policy server (a team bot for both robots: duo_nk, or SOLO_BOT=duo_att) +
+# vision connector + referee connector + one strategy node (duo_node) that sends each robot its own commands on the
+# robot's own ROS domain. tools/solo/run_rung.sh picks the bot and its parameters by one number.
 #   tools/solo/run_duo.sh start <blue|yellow> <keeper id> <field id> [mirror: true|false] [policy params JSON] [extra duo_node ros args...]
 #   tools/solo/run_duo.sh stop | status
 #   tools/solo/run_duo.sh bench <vision id> | bench none     a robot off the field (a card, taken off): zero, the other plays alone
@@ -9,6 +10,8 @@
 # "77 78"); each robot's stack is started with the same number: SOLO_DOMAIN=<n> ROBOT=<user@address> tools/solo/robot_stack.sh start.
 # This computer's own topics (vision, referee, the page) are on SOLO_DOMAIN (default 77, tools/solo/env.sh).
 # Logs and pid files in /tmp/solo_run/, as run_real.sh (either script's stop stops both setups).
+# SOLO_BOT: the team bot (duo_nk, default; duo_att). duo_att's fastest opponent speeds seen in play survive a restart
+# of the node (the page's STRATEGY button), not a restart of the policy server (this script's start): start it once per game.
 # SOLO_SIM_DIR (required): checkout of the strategy simulator package (import sslenv), with its .venv; SOLO_ARENA
 # overrides only the source tree the policy server runs from.
 D=/tmp/solo_run; mkdir -p $D
@@ -34,19 +37,21 @@ start)
   shift 6 2>/dev/null || shift $#
   read -r KDOM FDOM REST <<< "${SOLO_DOMAINS:-77 78}"
   int "$KDOM" && int "$FDOM" && [ -z "$REST" ] || { echo "REFUSED: SOLO_DOMAINS must be two domain numbers, not '$SOLO_DOMAINS'"; exit 1; }
+  BOT=${SOLO_BOT:-duo_nk}
+  case "$BOT" in duo_nk) KEEP="";; duo_att) KEEP="vo_m,vb_m,om";; *) echo "REFUSED: SOLO_BOT must be duo_nk or duo_att, not '$BOT'"; exit 1;; esac
   # duo_nk plays both robots from one program only with d_role -1 (the team); any other value is refused
   PARAMS=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); assert p.get("d_role",-1)==-1, "d_role must be -1 (the team) for run_duo.sh"; p["d_role"]=-1; print(json.dumps(p))' "$PARAMS") || { echo "REFUSED: policy params"; exit 1; }
   stop; sleep 0.5
   # a node command line the page saved in an earlier set-up (a one-robot solo_node line, other ids) must not be what
   # its STRATEGY button starts in this one: the page saves this node's line when it switches it off
-  rm -f $D/solo.cmd
+  rm -f $D/solo.cmd $D/duo_live.json     # ... nor the keeper / bench set live in it
   OTHER=$([ "$TEAM" = blue ] && echo yellow || echo blue)
-  (A=${SOLO_ARENA:-$SIM}; cd $A && PYTHONPATH=$A/src:$A/ssl-rules/src JAX_PLATFORMS=cpu nohup $SIM/.venv/bin/python ${SOLO_SRC:-$REPO/src}/solo_strategy/solo_strategy/policy_server.py --bot duo_nk --params "$PARAMS" > $D/policy.log 2>&1 & echo $! > $D/policy.pid)
+  (A=${SOLO_ARENA:-$SIM}; cd $A && PYTHONPATH=$A/src:$A/ssl-rules/src JAX_PLATFORMS=cpu nohup $SIM/.venv/bin/python ${SOLO_SRC:-$REPO/src}/solo_strategy/solo_strategy/policy_server.py --bot $BOT --keep "$KEEP" --params "$PARAMS" > $D/policy.log 2>&1 & echo $! > $D/policy.pid)
   # our colour's count 16: the connector's topic number is then the vision id itself (duo_node reads robot<id>)
   (nohup ros2 run ssl_vision_connector protobuf_to_ros --ros-args -p vision_port:=10006 -p mirror:=$MIRROR -p ${TEAM}_robot_count:=16 -p ${OTHER}_robot_count:=${SOLO_OTHER_COUNT:-3} > $D/vision.log 2>&1 & echo $! > $D/vision.pid)
   (nohup ros2 launch referee_connector referee_connector_launch.yaml > $D/referee.log 2>&1 & echo $! > $D/referee.pid)
-  (nohup ros2 run solo_strategy duo_node --ros-args -p team:=$TEAM -p ids:="[$KID, $FID]" -p keeper:=$KID -p domains:="[$KDOM, $FDOM]" "$@" > $D/duo.log 2>&1 & echo $! > $D/duo.pid)
-  echo "started: team $TEAM, keeper id $KID on domain $KDOM, field robot id $FID on domain $FDOM, mirror $MIRROR, params $PARAMS, extra: $*"
+  (nohup ros2 run solo_strategy duo_node --ros-args -p team:=$TEAM -p ids:="[$KID, $FID]" -p keeper:=$KID -p domains:="[$KDOM, $FDOM]" -p live_file:=$D/duo_live.json "$@" > $D/duo.log 2>&1 & echo $! > $D/duo.pid)
+  echo "started: $BOT, team $TEAM, keeper id $KID on domain $KDOM, field robot id $FID on domain $FDOM, mirror $MIRROR, params $PARAMS, extra: $*"
   echo "the policy server compiles for about a minute; until then both robots stand ('policy server does not answer')";;
 *) echo "usage: $0 start <blue|yellow> <keeper id> <field id> [mirror] [params json] [ros args] | stop | status | bench <id>|none | keeper <id>";;
 esac
