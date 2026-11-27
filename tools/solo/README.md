@@ -24,6 +24,7 @@ Environment variables:
 | `SOLO_OUR_ID` | required by `auto_session.py` with a home area (or `--our-id`) | our robot's vision id: the supervisor tells our robot from every other one by colour and this id in the raw vision |
 | `SOLO_CAMERAS`, `SOLO_CAMERA_IDS` | required by `auto_session.py` with a home area (or `--cameras N` / `--camera-ids 0,1,...`) | the field's cameras: a count N (ids 0..N-1) or a list of camera ids; a listed camera that has not sent a detection frame for 0.5 s, or never, is no information; a camera that sends without being listed refuses the start, and during a session is listed from its first frame on |
 | `SOLO_NOTICE_CMD` | optional | an executable for quiet notices of `auto_session.py` (a switch of halves), called as `CMD "message" "title"`; unset: a log line |
+| `SOLO_DOMAINS` | optional | `run_duo.sh`: the ROS domains of the keeper's and the field robot's stacks (default `77 78`) |
 | `SOLO_OWN_COUNT`, `SOLO_OTHER_COUNT` | optional | robots per team the vision connector reports, ours and the other team's (defaults 1 and 3) |
 | `SOLO_VISION_MAP_MODULE` | optional | path of `vision_map.py` for the strategy node's recovery (`env.sh` sets it to this repository's copy) |
 | `SOLO_VISION_PB_DIR` | optional | folder with generated SSL vision protobuf modules for `vision_map.py`, when `ssl_vision_connector` is not importable |
@@ -50,6 +51,28 @@ tools/solo/run_real.sh status
 python3 tools/solo/hq.py <blue|yellow>          # field page on http://localhost:8700
 tools/solo/run_real.sh stop; tools/solo/robot_stack.sh stop
 ```
+
+Two robots (`src/solo_strategy/solo_strategy/duo_node.py`): each robot's stack runs on its own ROS domain, so that
+neither hears the other's commands, and one strategy process sends each its own `/cmd_vel` on its domain:
+
+```bash
+ROBOT=<keeper's user@address>  SOLO_DOMAIN=77 tools/solo/robot_stack.sh start
+ROBOT=<field robot's user@address> SOLO_DOMAIN=78 tools/solo/robot_stack.sh start
+python3 tools/solo/duo_check.py <blue|yellow> <keeper id>:77 <field id>:78   # each robot turns on the spot once; needs the vision connector with <colour>_robot_count:=16 and no strategy node
+SOLO_DOMAINS="77 78" tools/solo/run_duo.sh start <blue|yellow> <keeper id> <field id> [mirror] [params JSON] [duo_node ros args]
+tools/solo/run_duo.sh status | bench <id> | bench none | keeper <id> | stop
+```
+
+Ids are vision ids. `run_duo.sh` runs the policy server with `--bot duo_nk` (`d_role` -1, both robots from one
+program), the vision connector with our colour's count 16 (its topic number is then the vision id itself; with a
+smaller count it is a rank among the ids seen, which changes when a robot leaves the field) and `duo_node`, which
+reads both robots by id, asks the server once per tick for both, and refuses at start two robots on the same domain
+and topic. A robot benched (`bench`), carried beyond the field lines, or unseen for `gone_after` s (2) gets zero and
+is off the field for the policy, so the other plays alone; an unseen robot gets zero after 0.5 s. `keeper` swaps the
+roles (tell the game controller the new goalkeeper id first). `run_real.sh stop` and `run_duo.sh stop` stop either
+setup (same run folder). The laptop recorder (`record_robot.py --laptop`) also records the node's copy of each
+robot's command (`/duo/robot<id>/cmd_vel`); a recorder per robot domain takes `--tag`. With one robot of our colour
+among two on the field, `run_real.sh` needs `SOLO_OWN_COUNT=16 SOLO_ROBOT_INDEX=<its id>`.
 
 The field page starts locked (view only) and refuses to drive while another program that commands the robot runs
 on the same computer, including the strategy node; its STRATEGY button stops and restarts the node. It accepts only
