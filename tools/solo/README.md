@@ -136,6 +136,13 @@ last four frames, how far the robot has carried the ball, the keeper-held-ball c
   place for that kick as in a stop and the policy plays from NORMAL_START on. In a stop the robot goes where
   `solo_nk` would send it (at a force start: 0.72 m behind the ball, as the policy was trained), through the same
   command ramps; in a halt the command is zero at once.
+- Their robots must reach the policy keeper first, as in the simulator: with their keeper in another slot the policy
+  scored 0.03 goals a game against a team it otherwise scores 5 against. `run_real.sh` therefore reads their robots by
+  vision id (the connector's count for their colour 16, the node's `opp_count` 16), and the server puts first the one
+  with the goalkeeper id the game controller has for their team. Check that id in the game controller before a game;
+  when it is not in view the server takes the robot nearest to their goal. Their other robots follow nearest the ball
+  first: a real team's field robots have no simulator slots, and of the rules tried in the simulator this one played
+  like the simulator's own order (the two swapped: about a goal a game worse).
 - The drive-back (`recover`) stays off: it commands the robot without the server.
 - The debug line (`/solo/debug`) and the server's reply carry `drib`, the carried distance the policy is shown (1 =
   the dribbling limit). It is an estimate from vision by the referee's rule (ball within robot + ball radius + 10 mm

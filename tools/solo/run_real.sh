@@ -11,7 +11,8 @@
 # files SOLO_RL_ROBOTS (default robots/three_wheel_fast.json:robots/three_wheel_fast_5a.json, relative to the simulator
 # checkout). The server's commands then carry that robot's ramps and must reach it as they are: the node runs with its
 # own ramp off, speed cap 1.5 m/s and yaw cap 6 rad/s (node args given after them win, but a lower cap is not what the
-# policy's memory holds).
+# policy's memory holds), and their robots are read by vision id (the connector's count for their colour 16): the
+# policy gets their keeper first, the robot with the goalkeeper id the game controller has for their team.
 D=/tmp/solo_run; mkdir -p $D
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
 source $REPO/tools/solo/env.sh
@@ -28,7 +29,8 @@ start)
     CK=$(readlink -f "$SOLO_CKPT"); [ -f "$CK" ] || { echo "REFUSED: no checkpoint at SOLO_CKPT=$SOLO_CKPT"; exit 1; }
     PARAMS=${4:-'{}'}
     POLICY=(--ckpt "$CK" --robot "${SOLO_RL_ROBOT:-three_wheel_fast}")
-    RL_NODE=(-p ramp_fwd:=0.0 -p ramp_side:=0.0 -p speed_cap:=1.5 -p angular_cap:=6.0)
+    RL_NODE=(-p ramp_fwd:=0.0 -p ramp_side:=0.0 -p speed_cap:=1.5 -p angular_cap:=6.0 -p opp_count:=16)
+    SOLO_OTHER_COUNT=16        # their robots by vision id: the policy must be told which one is their keeper
     export SSL_ROBOTS=${SOLO_RL_ROBOTS:-robots/three_wheel_fast.json:robots/three_wheel_fast_5a.json}
   fi
   shift 4 2>/dev/null || shift $#

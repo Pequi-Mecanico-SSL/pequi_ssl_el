@@ -39,8 +39,12 @@ policy was trained on from these requests and its own memory (latency compensati
 stack, how far the robot has carried the ball), so the server must see every tick, also the ones the policy does not
 play, and the commands in its replies must reach the robot as they are (the node's own ramp off: ramp_fwd 0, ramp_side
 0; angular_cap 6): they already carry the robot's command ramps. Differences to a scripted bot:
+  - their robots reach the policy keeper first, as in the simulator (it plays on that: with their keeper in another
+    slot it scored 0.03 goals a game against a team it otherwise scores 5 against). Their keeper is the robot whose
+    vision id (a 7th number of an "opp" entry) is ref's keeper id; without ids, or with that id not in view, the one
+    nearest to their goal. sslenv.deploy then orders the others nearest the ball first;
   - a request may carry "ref": {"score": [ours, theirs], "fouls": [ours, theirs], "cards": [s left of our longest
-    yellow card, of theirs]} (the policy sees them; zeros without it) and "prep": true while the referee's command is
+    yellow card, of theirs], "keeper": [our keeper's vision id, theirs]} (zeros without it) and "prep": true while the referee's command is
     PREPARE_KICKOFF / PREPARE_PENALTY: the robot then goes to its place for that kick as in a stop, and the policy
     plays from the NORMAL_START on;
   - the stop commands go through the same command ramps as the policy's; in a halt the reply is zero at once;
@@ -370,11 +374,24 @@ def step(q, mem):
     return dict(v=[0.0, 0.0], w=0.0, mode="halt"), mem
 
 
+def keeper_first(q):
+    """their robots in view in the simulator's slot order: the keeper, then the others"""
+    opp = [o for o in q["opp"] if o[5]]
+    ids = bool(opp) and all(len(o) > 6 for o in opp)
+    kid = ((q.get("ref") or {}).get("keeper") or [None, None])[1]
+    k = next((i for i, o in enumerate(opp) if ids and o[6] == kid), None)
+    if k is None and opp:
+        k = min(range(len(opp)), key=lambda i: (opp[i][0] - L2) ** 2 + opp[i][1] ** 2)
+    rest = [o for i, o in enumerate(opp) if i != k]
+    return ([opp[k]] if opp else []) + (sorted(rest, key=lambda o: o[6]) if ids else rest)
+
+
 def step_rl(q, mem):
     """a checkpoint: every tick with our robot in view goes through its memory, whoever commands the robot"""
     st = int(q["state"])
     if not q["us"][5]:
         return dict(v=[0.0, 0.0], w=0.0, mode="robot not seen"), mem
+    q = {**q, "opp": keeper_first(q)}
     av, ext = make_av(q), ext_of(q)
     prep = bool(q.get("prep")) and st in (int(GS.KICKOFF), int(GS.PENALTY))
     if st in ACTS and not prep:

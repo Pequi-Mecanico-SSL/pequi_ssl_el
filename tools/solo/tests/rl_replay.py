@@ -1,6 +1,7 @@
 """A trained policy in policy_server.py against the same policy in the strategy simulator: one simulated game per
 colour is played with the checkpoint going through the simulator's sslenv.deploy, every tick is turned into the request
-solo_node would send, and a policy_server.py process started with the same checkpoint answers them. What the server
+solo_node would send (their robots out of order, with vision ids 7, 3, 5 for the simulator's slots 0, 1, 2 and 7 the
+game controller's keeper id for them), and a policy_server.py process started with the same checkpoint answers them. What the server
 shows the policy must be what the simulator showed it: every entry of the observation frame that does not depend on
 the commands sent before must agree within --tol. The other entries and the commands themselves agree only roughly:
 the server is not in the loop (the simulated robot follows the simulator's commands, not the server's), and the two
@@ -78,6 +79,7 @@ s0, s1 = reset(key, 1, cfg), reset(key, 1, swapped(cfg))
 st = jax.tree.map(lambda x, y: jnp.concatenate([x, y]) if (x.ndim > 0 and x.shape[0] == 1) else x, s0._replace(key=None), s1._replace(key=None))._replace(key=s0.key)
 mA, mB = E.init_mem(2, N), O.init_mem(2, N)
 T = int(args.seconds * 30)
+VID = (7, 3, 5)                                  # their vision ids by simulator slot: the keeper, then ascending
 games, q_t = ([], []), [None, None]
 FED = deploy.own_fed(cfg)                        # frame entries that depend on the commands sent before
 f = lambda x: [float(v) for v in np.asarray(x).ravel()]
@@ -89,8 +91,8 @@ for i, k in enumerate(jax.random.split(jax.random.fold_in(key, 1), T)):
         q = dict(t=float(av.t[b]), state=int(av.state[b]), ours=bool(av.ours[b]), cmd_t=float(av.cmd_t[b]), still_since=float(av.still_since[b]),
                  last_team=int(av.last_team[b]), kick_pos=f(av.kick_pos[b]),
                  us=f(av.pos[b, 0]) + [float(av.th[b, 0])] + f(av.vel[b, 0]) + [int(av.act[b, 0])],
-                 opp=[f(av.opos[b, j]) + [float(av.oth[b, j])] + f(av.ovel[b, j]) + [int(av.oact[b, j])] for j in range(N)],
-                 ball=f(av.ball[b]) + f(av.bvel[b]), ref=dict(score=[int(v) for v in ref[0][b]], fouls=[int(v) for v in ref[1][b]], cards=f(ref[2][b])),
+                 opp=[f(av.opos[b, j]) + [float(av.oth[b, j])] + f(av.ovel[b, j]) + [int(av.oact[b, j]), VID[j]] for j in (2, 0, 1)],
+                 ball=f(av.ball[b]) + f(av.bvel[b]), ref=dict(score=[int(v) for v in ref[0][b]], fouls=[int(v) for v in ref[1][b]], cards=f(ref[2][b]), keeper=[0, 7]),
                  reset=i == 0, seq=i, frame=True, placed=bool(i > 0 and q_t[b] is not None and float(av.t[b]) - q_t[b] > 0.1))
         q_t[b] = float(av.t[b])
         games[b].append((q, out[b, 0, :2] * cfg.v_cap, float(out[b, 0, 2]) * cfg.w_cap, frame[b]))

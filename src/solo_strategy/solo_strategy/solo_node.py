@@ -5,7 +5,10 @@ the team's attack frame, asks the server once per tick and turns the answer into
 Subscribes:
     (vision_prefix, default /vision/poses)
     /vision/poses/<team>/robot<robot_index>      geometry_msgs/Pose2D   our robot (m, rad, field frame)
-    /vision/poses/<other team>/robot<0..2>       geometry_msgs/Pose2D   their robots
+    /vision/poses/<other team>/robot<0..2>       geometry_msgs/Pose2D   their robots (opp_count topics, default 3; with
+                                                 opp_count 16 and the vision connector's count for their colour 16, a
+                                                 topic's number is the robot's vision id and goes to the policy server
+                                                 with its pose: a trained policy needs to know which one is their keeper)
     /vision/poses/ball                           geometry_msgs/Pose2D
     /referee/game_state                          pequi_msgs/GameState
     /referee/state                               pequi_msgs/RefereeState   score, foul counters and yellow-card times, passed on
@@ -78,7 +81,7 @@ class SoloNode(Node):
         d('pred_after', 0.05); d('pred_delay', 0.1); d('pred_accel', 3.0); d('pred_vel_mix', 0.5); d('opp_hold', 0.5); d('ball_coast', 0.0)
         d('pred_policy_vel', 'model')
         d('speed_cap', 1.0); d('angular_cap', 4.0); d('ramp_fwd', 1.7); d('ramp_side', 1.5); d('side', 'auto'); d('force_state', ''); d('server_port', 47001); d('cmd_reliable', False)
-        d('vision_prefix', '/vision/poses')
+        d('vision_prefix', '/vision/poses'); d('opp_count', 3)
         d('foe_all', False)                                        # shared test field: every robot but ours counts as one of theirs
         d('recover', False); d('recover_speed', 0.4); d('recover_accel', 0.5); d('recover_time', 6.0); d('recover_dist', 2.5)
         d('recover_frames', 5); d('recover_stop_speed', 0.6); d('recover_stale', 0.3); d('recover_gyro', False)
@@ -120,7 +123,8 @@ class SoloNode(Node):
         self.pub = self.create_publisher(Twist, topic, 10 if g('cmd_reliable') else qos_profile_sensor_data)
         self.dbg = self.create_publisher(String, '/solo/debug', 10)
         self.create_subscription(Pose2D, f'{vp}/{self.team}/robot{idx}', self.on_us, 10)
-        srcs = [(self.other, i) for i in range(3)]
+        srcs = [(self.other, i) for i in range(int(g('opp_count')))]
+        self.opp_id = [j for _, j in srcs] if int(g('opp_count')) == 16 and not bool(g('foe_all')) else None
         if bool(g('foe_all')):                                     # both colours, ids 0..5, ours left out
             srcs = [(tm, j) for tm in (self.other, self.team) for j in range(6) if (tm, j) != (self.team, idx)]
         self.opp = [Track() for _ in srcs]
@@ -181,12 +185,14 @@ class SoloNode(Node):
         self.ref, self.ref_time = m, self.now()
 
     def ref_numbers(self, now):
-        """score, foul counters and the time left of the longest yellow card, ours first; None without a fresh referee message"""
+        """score, foul counters, the time left of the longest yellow card and the keeper's vision id, ours first; None
+        without a fresh referee message"""
         if self.ref is None or now - self.ref_time > 1.0:
             return None
         us, them = (self.ref.blue, self.ref.yellow) if self.team == 'blue' else (self.ref.yellow, self.ref.blue)
         card = lambda t: float(max(t.yellow_card_times, default=0.0))
-        return dict(score=[int(us.score), int(them.score)], fouls=[int(us.foul_counter), int(them.foul_counter)], cards=[card(us), card(them)])
+        return dict(score=[int(us.score), int(them.score)], fouls=[int(us.foul_counter), int(them.foul_counter)], cards=[card(us), card(them)],
+                    keeper=[int(us.goalkeeper), int(them.goalkeeper)])
 
     def tick(self):
         now = self.now()
@@ -266,7 +272,7 @@ class SoloNode(Node):
         if us_seen and math.hypot(bx - x, by - y) < TOUCH:
             self.last_team = 1
         opp = []
-        for tr in self.opp:
+        for k, tr in enumerate(self.opp):
             if self.predict and tr.seen(now, self.opp_hold):
                 ox, oy, oth, ovx, ovy = tr.coast(now, 0.1)
             elif tr.seen(now, self.pose_timeout):
@@ -275,7 +281,7 @@ class SoloNode(Node):
                 continue
             if math.hypot(bx - ox, by - oy) < TOUCH:
                 self.last_team = -1
-            opp.append([sx * ox, oy, wrap(math.pi - oth) if mirror else oth, sx * ovx, ovy, 1])
+            opp.append([sx * ox, oy, wrap(math.pi - oth) if mirror else oth, sx * ovx, ovy, 1] + ([self.opp_id[k]] if self.opp_id else []))
         if len(opp) > 3:                                           # the policy takes three: those nearest the ball
             opp.sort(key=lambda o: math.hypot(sx * bx - o[0], by - o[1]))
             opp = opp[:3]
