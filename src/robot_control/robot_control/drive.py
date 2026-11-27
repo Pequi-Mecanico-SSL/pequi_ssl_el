@@ -152,11 +152,12 @@ class Drive(Node):
             self.log.write('t,tx,ty,tw,rx,ry,rw,ax,ay,aw,ex,ey,ew,gz,bias,herr,px,py,pth,accx,accy,'
                            f'{w("sp")},{w("ff")},{w("v")},{w("i")},{w("p")}\n')
 
-        self.state_pub = self.create_publisher(JointState, 'wheels/state', 10)
-        self.imu_pub = self.create_publisher(Imu, 'imu', 10)
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
-        self.ref_pub = self.create_publisher(Twist, 'cmd_vel_ref', 10)
-        self.status_pub = self.create_publisher(String, 'drive/status', 10)
+        # telemetry best effort: a subscriber that misses a message is not waited for (control and telemetry share the loop)
+        self.state_pub = self.create_publisher(JointState, 'wheels/state', qos_profile_sensor_data)
+        self.imu_pub = self.create_publisher(Imu, 'imu', qos_profile_sensor_data)
+        self.odom_pub = self.create_publisher(Odometry, 'odom', qos_profile_sensor_data)
+        self.ref_pub = self.create_publisher(Twist, 'cmd_vel_ref', qos_profile_sensor_data)
+        self.status_pub = self.create_publisher(String, 'drive/status', qos_profile_sensor_data)
         # best effort: a command lost on the Wi-Fi is dropped, never delivered late
         self.create_subscription(Twist, 'cmd_vel', self.on_cmd_vel, qos_profile_sensor_data)
         self.create_subscription(Float32MultiArray, 'wheels/cmd', self.on_wheel_cmd, 10)

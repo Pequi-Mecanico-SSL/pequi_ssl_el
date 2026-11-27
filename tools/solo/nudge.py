@@ -9,7 +9,7 @@ from sensor_msgs.msg import JointState
 # usage: nudge.py vx vy w seconds   -> publishes on /cmd_vel at 20 Hz, then zeros; prints wheel speeds
 vx, vy, w, T = (float(a) for a in sys.argv[1:5])
 rclpy.init(); n = Node('nudge'); pub = n.create_publisher(Twist, '/cmd_vel', qos_profile_sensor_data); ws = []
-n.create_subscription(JointState, '/wheels/state', lambda m: ws.append((time.time(), list(m.velocity), list(m.effort))), 10)
+n.create_subscription(JointState, '/wheels/state', lambda m: ws.append((time.time(), list(m.velocity), list(m.effort))), qos_profile_sensor_data)
 t0 = time.time()
 while time.time() - t0 < 0.6: rclpy.spin_once(n, timeout_sec=0.02)      # discovery
 t0 = time.time(); peak = [0, 0, 0]; k0 = len(ws)
