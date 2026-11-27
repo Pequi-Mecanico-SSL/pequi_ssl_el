@@ -1,1 +1,1 @@
-{"a_cl": 2, "a_clr": 0, "a_nf": 2, "a_margin": 99, "a_spall": 1, "a_st": 1, "a_sp2": 1, "a_st_v": 0.35, "a_st_min": 0.08, "a_gmin": 1.6, "a_gmax": 1.9, "a_gl": 1, "nk_oa": 0.06, "nk_da_run": 0.12, "a_nfv": 0.9, "a_solo": 1}
+{"a_cl": 2, "a_clr": 0, "a_cw": 1, "a_nf": 2, "a_margin": 99, "a_spall": 1, "a_st": 1, "a_sp2": 1, "a_st_v": 0.35, "a_st_min": 0.08, "a_gmin": 1.6, "a_gmax": 1.9, "a_gl": 1, "nk_oa": 0.06, "nk_da_run": 0.12, "a_nfv": 0.9, "a_solo": 1}
