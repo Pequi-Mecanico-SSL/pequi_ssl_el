@@ -4,7 +4,8 @@ Reads the motor CAN bus and the IMU directly and runs the whole loop at a fixed
 rate: state estimate (wheels + gyro), a velocity reference that respects the
 motors' current limit, and wheel speed setpoints with current feedforward from
 the robot's model (drive_model.py). The ESCs keep their own velocity loops and
-correct what the model misses.
+correct what the model misses. A motor that runs against its command (reversed
+torque: stale encoder calibration, swapped phase wires) stops all of them.
 
 Topics:
   cmd_vel        (Twist, in)              body velocity, m/s and rad/s, held constant over the ground until
@@ -16,7 +17,8 @@ Topics:
   imu            (Imu, out)               rates (rad/s) and accelerations (m/s^2), raw
   odom           (Odometry, out)          pose since start (wheels + gyro) and body velocity
   cmd_vel_ref    (Twist, out)             the velocity being commanded to the wheels
-  drive/status   (String, out)            one line per second: motors, bus voltage, temperatures, loop timing
+  /diagnostics   (DiagnosticArray, out)   once a second: each motor (state, fault, bus voltage, board temperature,
+                                          encoder), the bus (battery, estop, CAN errors), the control loop
 """
 import collections
 import math
@@ -28,14 +30,16 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rcl_interfaces.msg import ParameterDescriptor
+from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Empty, Float32MultiArray, String
+from std_msgs.msg import Empty, Float32MultiArray
 
 from . import esc_bus
 from .drive_model import Model, Reference
 from .esc_bus import EscBus
+from .esc_monitor import ERROR, WARN, EscMonitor, make_status
 from .lsm6ds33 import Lsm6ds33
 
 
@@ -54,14 +58,14 @@ class Drive(Node):
         d('cmd_timeout_s', 0.3)
         d('watchdog_ms', 500)
         d('diag_period_ms', 500)
-        # robot model (drive_model.py); default: 4 wheels, motor 0 front-right, 1 front-left, 2 back-right, 3 back-left
-        d('wheel_angles_deg', [-60.0, 60.0, -135.0, 135.0])
-        d('robot_radius', 0.077, any_type)
-        d('wheel_radius', 0.0245, any_type)
+        # robot model (drive_model.py); default: motor 0 front-left, 1 front-right, 2 back
+        d('wheel_angles_deg', [60.0, -60.0, 180.0])
+        d('robot_radius', 0.083, any_type)
+        d('wheel_radius', 0.0241, any_type)
         d('oblique_loss', 0.0, any_type)
         d('creep', 0.0, any_type)
-        d('mass', 2.0)
-        d('inertia', 0.008)
+        d('mass', 1.6)
+        d('inertia', 0.0062)
         d('motor_kt', 0.0347)
         d('roller_friction', 0.0, any_type)
         d('rolling_current', 0.0, any_type)
@@ -93,6 +97,14 @@ class Drive(Node):
         # ESC parameters pushed at start and when an ESC reboots, "name=value" (names of esc_bus.PARAMS)
         d('esc_params', [''])
         d('log_dir', '')
+        # a wheel this far against or beyond its command for this long stops all motors (0 s = no check)
+        d('tracking_error_rad_s', 20.0)
+        d('tracking_timeout_s', 2.0)
+        # /diagnostics levels. Battery: 6S at 3.6 and 3.5 V per cell; the ESCs stop by themselves at 3.4
+        d('battery_warn_v', 21.6)
+        d('battery_error_v', 21.0)
+        d('temp_warn_c', 80.0)
+        d('temp_error_c', 100.0)
 
         p = lambda n: self.get_parameter(n).value
         self.dt = 1.0 / float(p('rate_hz'))
@@ -104,7 +116,8 @@ class Drive(Node):
         self.current_limit = float(p('current_limit_a'))
         self.use_ff = bool(p('feedforward'))
         self.esc_limit = self.current_limit * float(p('current_headroom'))
-        self.warm_limit = min(self.current_limit, float(p('continuous_a')) / float(p('current_headroom')))
+        self.continuous = float(p('continuous_a'))
+        self.warm_limit = min(self.current_limit, self.continuous / float(p('current_headroom')))
         self.ref = Reference(self.model, self.current_limit,
                              p('max_accel'), p('max_ang_accel'), p('max_wheel_rad_s'),
                              p('max_lead'), p('max_lead_yaw'))
@@ -117,7 +130,12 @@ class Drive(Node):
         self.esc_params = [(k.strip(), float(v)) for k, v in
                            (s.split('=') for s in p('esc_params') if '=' in s)]
 
-        self.bus = EscBus(p('can_interface'))
+        self.iface = p('can_interface')
+        self.bus = EscBus(self.iface)
+        self.monitor = EscMonitor(self.n, 'drive', float(p('tracking_error_rad_s')), float(p('tracking_timeout_s')),
+                                  float(p('battery_warn_v')), float(p('battery_error_v')),
+                                  float(p('temp_warn_c')), float(p('temp_error_c')),
+                                  int(p('diag_period_ms')) / 1000.0)
         try:
             self.imu = Lsm6ds33(int(p('i2c_bus')))
         except OSError as e:
@@ -138,7 +156,6 @@ class Drive(Node):
         self.angle_used = z()                                  # wheel angles at the last odometry step
         self.tlm_time = [None] * self.n
         self.flags = {}
-        self.fw = {}
         self.vbus, self.temp = z(), z()
 
         self.gyro_bias = 0.0
@@ -151,6 +168,7 @@ class Drive(Node):
         self.setpoint, self.ff = z(), z()
         self.ticks = 0
         self.late = 0.0
+        self.lowered = False
 
         self.log = None
         if p('log_dir'):
@@ -164,7 +182,7 @@ class Drive(Node):
         self.imu_pub = self.create_publisher(Imu, 'imu', 10)
         self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
         self.ref_pub = self.create_publisher(Twist, 'cmd_vel_ref', 10)
-        self.status_pub = self.create_publisher(String, 'drive/status', 10)
+        self.diag_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
         # best effort: a command lost on the Wi-Fi is dropped, never delivered late
         self.create_subscription(Twist, 'cmd_vel', self.on_cmd_vel, qos_profile_sensor_data)
         self.create_subscription(Float32MultiArray, 'wheels/cmd', self.on_wheel_cmd, 10)
@@ -184,11 +202,18 @@ class Drive(Node):
         b.command(i, esc_bus.OP_TELEM, int(round(self.dt * 1000)).to_bytes(2, 'little'))
         b.command(i, esc_bus.OP_WATCHDOG, int(self.get_parameter('watchdog_ms').value).to_bytes(2, 'little'))
         b.command(i, esc_bus.OP_DIAG, int(self.get_parameter('diag_period_ms').value).to_bytes(2, 'little'))
-        b.set_param(i, 'iq_limit', self.esc_limit)
+        b.set_param(i, 'iq_limit', self.esc_current_limit(i))
         for name, value in self.esc_params:
             b.set_param(i, name, value)
         if not self.estopped:
             b.command(i, esc_bus.OP_ENABLE)
+
+    def esc_current_limit(self, i):
+        """Iq limit for an ESC: above the continuous current only when its firmware guards the windings."""
+        fw = self.monitor.firmware(i)
+        if self.esc_limit > self.continuous and (fw is None or fw < esc_bus.GUARD_FW):
+            return self.continuous
+        return self.esc_limit
 
     def read_bus(self, now):
         for f in self.bus.poll():
@@ -202,20 +227,28 @@ class Drive(Node):
                     self.angle[i] += ((raw - self.angle_raw[i] + 0x8000) % 0x10000 - 0x8000) * esc_bus.POS_TO_RAD
                 self.angle_raw[i] = raw
                 self.tlm_time[i] = now
+                self.monitor.on_tlm(i, speed, iq, flags, fault, now)
                 self.check_flags(i, flags, fault)
             elif kind == 'diag':
                 self.vbus[i], self.temp[i] = f[2], f[3]
+                self.monitor.on_diag(i, *f[2:], now)
+            elif kind == 'stat':
+                self.monitor.on_stat(i, *f[2:])
             elif kind == 'hello':
                 _, _, uid, fw, fl = f
-                known = i in self.fw
-                self.fw[i] = fw
+                known = self.monitor.firmware(i) is not None
+                self.monitor.on_hello(i, uid, fw)
                 self.angle_raw[i] = None
                 status = (f"current sense {'ok' if fl & 1 else 'FAIL'}, "
                           f"{'calibrated' if fl & 2 else 'NOT CALIBRATED'}, "
                           f"encoder {'ok' if fl & 4 else 'MISSING'}")
                 if not known and now - self.start < 2.0:
-                    # answer to the ping at start: already configured
+                    # answer to the ping at start: configured, but for the limit that depends on the firmware
                     self.get_logger().info(f'motor {i}: uid=0x{uid:08X} fw={fw}, {status}')
+                    self.bus.set_param(i, 'iq_limit', self.esc_current_limit(i))
+                    if self.esc_current_limit(i) < self.esc_limit:
+                        self.get_logger().warning(f'motor {i}: firmware {fw} does not guard the windings, current '
+                                                  f'limit {self.continuous:g} A instead of {self.esc_limit:g} A')
                 else:
                     self.get_logger().warning(f'motor {i} booted (uid=0x{uid:08X} fw={fw}, {status}), configuring')
                     self.configure_motor(i)
@@ -257,6 +290,7 @@ class Drive(Node):
 
     def on_enable(self, _):
         self.estopped = False
+        self.monitor.clear()
         self.reset_motion()
         for i in range(self.n):
             self.bus.command(i, esc_bus.OP_ENABLE)
@@ -277,6 +311,13 @@ class Drive(Node):
         self.read_bus(now)
         fresh = [t is not None and now - t < 0.2 for t in self.tlm_time]
         wheels_ok = all(fresh)
+        for i in range(self.n):
+            if self.monitor.check_tracking(i, self.setpoint[i], not self.estopped, now):
+                self.estopped = True
+                self.bus.estop()
+                self.reset_motion()
+                self.get_logger().error(f'{self.monitor.trip}: all motors disabled. Its torque is reversed: recalibrate '
+                                        'its encoder, check its phase wires (wheels/enable to clear)')
 
         # gyro: mean rate since the last step, bias learned while standing still
         sample = self.imu.take() if self.imu else None
@@ -325,8 +366,10 @@ class Drive(Node):
             self.setpoint = self.wheel_cmd.copy()
             self.ff[:] = 0.0
         else:
-            warm = any(f[0] & esc_bus.FLAG_LIMITED for f in self.flags.values())
-            self.ref.budget = self.warm_limit if warm else self.current_limit
+            # an ESC that gives only the continuous current: its windings are warm, or its firmware is old
+            self.lowered = (any(f[0] & esc_bus.FLAG_LIMITED for f in self.flags.values())
+                            or any(self.esc_current_limit(i) < self.esc_limit for i in range(self.n)))
+            self.ref.budget = self.warm_limit if self.lowered else self.current_limit
             v, acc = self.ref.step(target, dt, self.yaw_rate, self.vel if wheels_ok else None)
             self.ref_history.append(v.copy())
             delayed = self.ref_history[0]
@@ -391,17 +434,35 @@ class Drive(Node):
             t.linear.x, t.linear.y, t.angular.z = (float(x) for x in self.ref.v)
             self.ref_pub.publish(t)
         if self.ticks % round(1.0 / self.dt) == 0:
-            state = 'ESTOP' if self.estopped else 'on'
-            stale = [i for i, ok in enumerate(fresh) if not ok]
-            line = (f'{state} vbus {self.vbus.max():.1f} V temp ' + ' '.join(f'{t:.0f}' for t in self.temp)
-                    + ' C iq ' + ' '.join(f'{a:+.2f}' for a in self.iq)
-                    + f' gyro {"ok" if self.yaw_rate is not None else "MISSING"} bias {self.gyro_bias:+.4f}'
-                    + f' late {self.late * 1000:.1f} ms'
-                    + (f' NO TELEMETRY from {stale}' if stale else ''))
-            self.status_pub.publish(String(data=line))
-            if stale or self.yaw_rate is None:
-                self.get_logger().warning(line, throttle_duration_sec=5.0)
-            self.late = 0.0
+            self.publish_diagnostics(fresh)
+
+    def publish_diagnostics(self, fresh):
+        now = time.monotonic()
+        msg = DiagnosticArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.status = [self.monitor.motor_status(i, self.setpoint[i], now) for i in range(self.n)]
+        age = lambda t: 'never' if t is None else f'{now - t:.2f}'
+        msg.status.append(self.monitor.bus_status(self.iface, self.estopped, now, (
+            ('cmd_vel age (s)', age(self.cmd_time)), ('wheels/cmd age (s)', age(self.wheel_cmd_time)))))
+        problems = []
+        if self.yaw_rate is None:
+            problems.append((ERROR, 'no gyro: yaw from the wheels only'))
+        if self.lowered:
+            problems.append((WARN, f'planning with {self.warm_limit:.1f} A: an ESC gives only its continuous current'))
+        if self.late > self.dt:
+            problems.append((WARN, f'control step {self.late * 1000:.0f} ms late'))
+        msg.status.append(make_status('drive: control', '', problems, (
+            ('gyro bias (rad/s)', f'{self.gyro_bias:+.4f}'),
+            ('planned current limit (A)', f'{self.ref.budget:.1f}'),
+            ('latest step lateness (ms)', f'{self.late * 1000:.1f}'))))
+        self.diag_pub.publish(msg)
+        for i in self.monitor.stale_diag(now):
+            self.bus.command(i, esc_bus.OP_DIAG, int(self.get_parameter('diag_period_ms').value).to_bytes(2, 'little'))
+        stale = [i for i, ok in enumerate(fresh) if not ok]
+        if stale or self.yaw_rate is None:
+            self.get_logger().warning(('no telemetry from motors ' + str(stale) + '; ' if stale else '')
+                                      + ('no gyro' if self.yaw_rate is None else ''), throttle_duration_sec=5.0)
+        self.late = 0.0
 
     def shutdown(self):
         self.bus.estop()

@@ -1,9 +1,10 @@
 """Live view of /diagnostics in the terminal: diagwatch.py [domain ...]
 
 Subscribes on every ROS domain given (default 77 and 0) and redraws in place.
-can_bridge's statuses get a motor table and a bus line; any other status is
-listed with its values. Run it through tools/diagwatch.
+The motor and bus statuses of the node that drives the ESCs (drive, or can_bridge of the old
+stack) get a motor table and a bus line; any other status is listed with its values. Run it through tools/diagwatch.
 """
+import re
 import sys
 import time
 
@@ -15,6 +16,8 @@ from rclpy.node import Node
 
 LEVELS = (('OK', '32'), ('WARN', '33'), ('ERROR', '31'), ('STALE', '35'))
 STALE_AFTER = 3.0   # s without a message before a domain's data counts as old
+MOTOR_STATUS = re.compile(r'(?:drive|can_bridge): motor (\d+)$')
+BUS_STATUS = re.compile(r'(?:drive|can_bridge): bus$')
 
 
 def paint(text, code):
@@ -48,23 +51,25 @@ def render(domain, statuses, age):
     head = f'domain {domain}  /diagnostics  ' + (
         paint(f'no message for {age:.0f} s', '31;1') if old else f'{age:.1f} s ago')
     lines = [paint(head, '1'), '']
-    motors = sorted((int(name.rsplit(' ', 1)[1]), s) for name, s in statuses.items()
-                    if name.startswith('can_bridge: motor '))
-    bus = statuses.get('can_bridge: bus')
+    motors = sorted((int(m.group(1)), s) for name, s in statuses.items()
+                    if (m := MOTOR_STATUS.match(name)))
+    bus = next((s for name, s in statuses.items() if BUS_STATUS.match(name)), None)
     if bus:
         v = {kv.key: kv.value for kv in bus.values}
-        cmd = f"{v['wheels/cmd age (s)']} s ago" if 'wheels/cmd age (s)' in v else 'none yet'
+        source = 'cmd_vel' if 'cmd_vel age (s)' in v else 'wheels/cmd'
+        age = v.get(f'{source} age (s)', 'never')
+        cmd = 'none yet' if age == 'never' else f'{age} s ago'
         can = '/'.join(v.get(f'can {k}', '-') for k in ('rx_errors', 'tx_errors', 'rx_over_errors'))
         lines.append(f"  bus   {level(bus)} battery {v.get('battery (V)', '-')} V   "
                      f"estop {'ON' if v.get('estop') == 'True' else 'off'}   "
-                     f"wheels/cmd {cmd}   "
+                     f"{source} {cmd}   "
                      f"CAN rx/tx/overrun errors {can}   {bus.message}")
     if motors:
         lines.append(paint('  motor level state   rad/s     cmd    Iq A  bus V board   zero'
                            '  enc err', '2'))
         lines += [motor_row(i, s) for i, s in motors]
     for name, s in sorted(statuses.items()):
-        if name.startswith('can_bridge: '):
+        if MOTOR_STATUS.match(name) or BUS_STATUS.match(name):
             continue
         lines.append(f'  {level(s)} {name}: {s.message}')
         if s.values:
