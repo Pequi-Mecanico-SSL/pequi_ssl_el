@@ -75,6 +75,26 @@ setup (same run folder). The laptop recorder (`record_robot.py --laptop`) also r
 robot's command (`/duo/robot<id>/cmd_vel`); a recorder per robot domain takes `--tag`. With one robot of our colour
 among two on the field, `run_real.sh` needs `SOLO_OWN_COUNT=16 SOLO_ROBOT_INDEX=<its id>`.
 
+The match set-up by one number (`run_rung.sh`; `run_rung.sh show <n> ...` prints the command and runs nothing):
+
+```bash
+tools/solo/run_rung.sh 1 <blue|yellow> <keeper id> <field id> [mirror]   # two robots, duo_att, profiles/duo_att.json
+tools/solo/run_rung.sh 2 <blue|yellow> <keeper id> <field id> [mirror]   # two robots, duo_nk, profiles/field.json
+tools/solo/run_rung.sh 3 <blue|yellow> <keeper id> <field id> [mirror]   # one robot (the keeper id), solo_nk, profiles/field.json
+```
+
+All three at 1.5 m/s. `profiles/field.json` is the profile the one robot plays on the real field; rung 3 also turns
+the drive-back on (`recover:=true`). `duo_att` (the strategy simulator's `sslenv.scripted.duo_att`, `SOLO_BOT=duo_att`
+for `run_duo.sh`) needs a simulator checkout that has it (`SOLO_SIM_DIR` / `SOLO_ARENA`). Its keeper keeps goal; the
+field robot plays every ball it reaches first while their robots are slow, and becomes `duo_nk`'s wall for the rest of
+the game the first time one of theirs is seen faster than `a_nfv` while the ball is in play. The mode line
+(`run_duo.sh status`) shows the fastest speed seen and `CAUTIOUS` once that has happened. That speed survives a
+restart of the node (`--keep` of the policy server), not a restart of the policy server: `run_rung.sh` / `run_duo.sh
+start` once per game. The keeper and bench set live are kept in `/tmp/solo_run/duo_live.json` and taken up again when
+the node restarts with the same team and ids (the page's STRATEGY button); `start` removes the file. Every 2 s the node
+counts the robot stacks (publishers of `/wheels/state`) on each robot's domain: with two on one domain, the robots of
+that domain get zero and the mode line says so; with none it only warns.
+
 The field page starts locked (view only) and refuses to drive while another program that commands the robot runs
 on the same computer, including the strategy node; its STRATEGY button stops and restarts the node. It accepts only
 JSON POST requests addressed to its own host and port, so other clients must send
