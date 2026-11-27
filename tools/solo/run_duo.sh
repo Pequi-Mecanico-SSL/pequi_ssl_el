@@ -6,6 +6,10 @@
 #   tools/solo/run_duo.sh stop | status
 #   tools/solo/run_duo.sh bench <vision id> | bench none     a robot off the field (a card, taken off): zero, the other plays alone
 #   tools/solo/run_duo.sh keeper <vision id>                 swap roles (tell the game controller the same goalkeeper id)
+#   tools/solo/run_duo.sh params                             the strategy's parameters in force, its profile, its report
+#   tools/solo/run_duo.sh set <key>=<value> [...]            change parameters live: the next tick, no restart (policy_cfg.py)
+#   tools/solo/run_duo.sh profile [key ...]                  back to the profile values (all, or these keys)
+#   The values set live last until the policy server is started again (start, run_rung.sh); a node restart keeps them.
 # Ids are vision ids (the pattern's id). The robots' domains: SOLO_DOMAINS="<keeper's> <field robot's>" (default
 # "77 78"); each robot's stack is started with the same number: SOLO_DOMAIN=<n> ROBOT=<user@address> tools/solo/robot_stack.sh start.
 # This computer's own topics (vision, referee, the page) are on SOLO_DOMAIN (default 77, tools/solo/env.sh).
@@ -27,6 +31,7 @@ bench)
   [ -n "$2" ] || { echo "usage: $0 bench <vision id> | none"; exit 1; }
   if [ "$2" = none ]; then V="[-1]"; else int "$2" || { echo "not a vision id: $2"; exit 1; }; V="[$2]"; fi
   ros2 param set /duo_strategy bench "$V";;
+params|set|profile) python3 $REPO/tools/solo/policy_cfg.py "$@";;
 keeper)
   int "$2" || { echo "usage: $0 keeper <vision id>"; exit 1; }
   ros2 param set /duo_strategy keeper "$2";;
@@ -53,5 +58,5 @@ start)
   (nohup ros2 run solo_strategy duo_node --ros-args -p team:=$TEAM -p ids:="[$KID, $FID]" -p keeper:=$KID -p domains:="[$KDOM, $FDOM]" -p live_file:=$D/duo_live.json "$@" > $D/duo.log 2>&1 & echo $! > $D/duo.pid)
   echo "started: $BOT, team $TEAM, keeper id $KID on domain $KDOM, field robot id $FID on domain $FDOM, mirror $MIRROR, params $PARAMS, extra: $*"
   echo "the policy server compiles for about a minute; until then both robots stand ('policy server does not answer')";;
-*) echo "usage: $0 start <blue|yellow> <keeper id> <field id> [mirror] [params json] [ros args] | stop | status | bench <id>|none | keeper <id>";;
+*) echo "usage: $0 start <blue|yellow> <keeper id> <field id> [mirror] [params json] [ros args] | stop | status | bench <id>|none | keeper <id> | params | set key=value ... | profile [key ...]";;
 esac
