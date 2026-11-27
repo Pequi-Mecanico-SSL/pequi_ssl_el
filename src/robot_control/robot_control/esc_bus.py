@@ -9,8 +9,8 @@ ID_TLM, ID_DIAG, ID_HELLO = 0x200, 0x280, 0x300
 (OP_STOP, OP_VEL, OP_ENABLE, OP_DISABLE, OP_CURLIM, OP_TELEM, OP_TERM, OP_PING,
  OP_WATCHDOG, OP_PARAM, OP_DIAG) = range(11)
 PARAMS = {'vel_kp': 0, 'vel_ki': 1, 'accel_max': 2, 'ref_hz': 3, 'iq_limit': 4, 'obs_hz': 5,
-          'cur_hz': 6, 'inertia_ff': 12, 'cog_gain': 15, 'flat': 16, 'drain': 17}
-FLAG_ENABLED, FLAG_READY, FLAG_WD_TRIPPED, FLAG_FAULT = 1, 2, 4, 8
+          'cur_hz': 6, 'inertia_ff': 12, 'cog_gain': 15, 'flat': 16, 'drain': 17, 'i_cont': 20, 'heat_tau': 21}
+FLAG_ENABLED, FLAG_READY, FLAG_WD_TRIPPED, FLAG_FAULT, FLAG_LIMITED = 1, 2, 4, 8, 0x40
 FAULTS = ('none', 'encoder', 'overcurrent', 'undervoltage', 'overvoltage',
           'not calibrated', 'current sense', 'angle')
 POS_TO_RAD = 2 * math.pi / 4096
