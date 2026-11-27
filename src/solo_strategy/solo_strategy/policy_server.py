@@ -14,7 +14,8 @@ Two robots (a team bot such as duo_nk with d_role -1): "us" is a list of robots,
 the team's slot order (duo_nk: slot 0 the keeper, slot 1 the field robot); the reply then has "v": [[vx, vy], ...],
 "w": [w, ...] and "mode" for each robot in the same order, and "team_size", the number of robots the bot plays (its TEAM_SIZE). A robot not seen (seen 0) is off the field for the policy
 and gets zero; in a stop no robot's target is nearer the ball than --stop-keep m (0.7), and each robot keeps --own-gap m
-(0.35) from the other (centres) as well as 0.6 m from the ball.
+(0.35) from the other (centres) as well as 0.6 m from the ball. In BALL_PLACEMENT a request may carry "place": [x, y]
+(the placement spot, attack frame): then the whole line from the ball to the spot is kept off as the ball is.
 States are sslrules.GameState values. The policy acts in RUNNING / FREE_KICK / KICKOFF / PENALTY; in STOP the robot
 goes to the team's restart pose (at --stop-speed at most) and keeps 0.6 m from the ball; in every other state it stands still."""
 import argparse
@@ -150,6 +151,14 @@ def off_ball(target, ball, pos, keep):
     return ball + d / dd * keep
 
 
+def nearest(p, a, b):
+    """the point of the segment a -> b nearest to p"""
+    ab = b - a
+    l2 = float(ab @ ab)
+    t = 0.0 if l2 < 1e-12 else min(1.0, max(0.0, float((p - a) @ ab) / l2))
+    return a + t * ab
+
+
 def step_team(q, mem):
     """several robots: the same states and stop rules as step(), per robot; a robot not seen gets zero"""
     st, us = int(q["state"]), q["us"]
@@ -168,11 +177,17 @@ def step_team(q, mem):
         tg, hd = stop_pose_team(P, mem, make_av(q), jnp.asarray([int(kind)], jnp.int32), jnp.asarray([0 if ours else 1], jnp.int32),
                                 jnp.asarray([[sx, sy]], jnp.float32))
         tg, hd = np.asarray(tg), np.asarray(hd)
+        place = np.asarray(q["place"], float) if st == int(GS.BALL_PLACEMENT) and q.get("place") is not None else None
         out = dict(v=[], w=[], mode=[])
         for i, r in enumerate(us):
             if not seen[i]:
                 out["v"].append([0.0, 0.0]); out["w"].append(0.0); out["mode"].append("robot not seen"); continue
-            vv, w = stop_cmd({**q, "us": r}, off_ball(tg[i], np.asarray(q["ball"][:2]), np.asarray(r[:2]), args.stop_keep), float(hd[i]))
+            b, p_i = np.asarray(q["ball"][:2]), np.asarray(r[:2])
+            if place is not None:                               # the corridor ball -> spot counts as the ball
+                tgt = off_ball(tg[i], nearest(tg[i], b, place), p_i, args.stop_keep)
+                vv, w = stop_cmd({**q, "us": r, "ball": list(nearest(p_i, b, place))}, tgt, float(hd[i]))
+            else:
+                vv, w = stop_cmd({**q, "us": r}, off_ball(tg[i], b, p_i, args.stop_keep), float(hd[i]))
             vv = keep_apart(vv, np.asarray(r[:2]), [o[:2] for j, o in enumerate(us) if j != i and seen[j]], args.own_gap)
             sp = float(np.linalg.norm(vv))
             if sp > args.stop_speed:

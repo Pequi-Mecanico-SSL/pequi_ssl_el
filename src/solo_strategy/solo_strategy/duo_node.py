@@ -277,6 +277,8 @@ class DuoNode(Node):
                  kick_pos=[sx * self.kick_pos[0], self.kick_pos[1]], us=us, opp=opp, ball=[sx * bx, by, sx * bvx, bvy])
         if nxt is not None:
             q['next'] = [nxt[0], bool(nxt[1]), sx * bx, by]
+        if gs is not None and state == BALL_PLACEMENT and gs.has_placement_position:
+            q['place'] = [sx * float(gs.placement_x), float(gs.placement_y)]     # the server keeps the ball -> spot line off
         self.seq += 1
         q['seq'] = self.seq
         try:
