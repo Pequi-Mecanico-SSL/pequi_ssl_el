@@ -123,7 +123,7 @@ def test_node_declares_what_it_documents():
     for n in ast.walk(ast.parse(src)):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "d" and n.args and isinstance(n.args[0], ast.Constant):
             declared.add(n.args[0].value)
-    for name in ("ids", "keeper", "domains", "cmd_topics", "speed_caps", "bench", "gone_after", "off_margin"):
+    for name in ("ids", "keeper", "domains", "cmd_topics", "speed_caps", "bench", "gone_after", "off_margin", "live_file", "stack_topic"):
         assert name in declared
     assert "/robot{vid}'" in src and "_robot_count:=16" in src
 
@@ -141,3 +141,56 @@ def test_a_non_finite_policy_answer_gives_zero_not_a_growing_command(bad):
             assert c == (0.0, 0.0, 0.0) and r.last_vf == (0.0, 0.0) and r.last_w == 0.0
         else:
             assert all(math.isfinite(v) for v in c) and c != (0.0, 0.0, 0.0)
+
+
+def test_live_roles_survive_a_restart_of_the_same_set_up(tmp_path):
+    """the keeper and bench set live are what a node with the same team and ids starts with (the page's restart)"""
+    f = str(tmp_path / "duo_live.json")
+    args = ([1, 3], [77, 78], ["/cmd_vel", "/cmd_vel"], 77)
+    assert D.load_live(f, "yellow", *args) is None                       # no file: the start-up roles
+    D.save_live(f, "yellow", [1, 3], 3, {1})
+    assert D.load_live(f, "yellow", *args) == (3, {1})
+    assert D.load_live(f, "blue", *args) is None                         # another set-up ignores it
+    assert D.load_live(f, "yellow", [1, 4], [77, 78], ["/cmd_vel", "/cmd_vel"], 77) is None
+    assert D.load_live("", "yellow", *args) is None
+    D.save_live("", "yellow", [1, 3], 3, set())                           # '' = not kept: nothing written, no error
+    open(f, "w").write('{"team": "yellow", "ids": [1, 3], "keeper": 7, "bench": []}')
+    assert D.load_live(f, "yellow", *args) is None                       # a keeper that is not one of ids
+    open(f, "w").write('{"team": "yel')
+    assert D.load_live(f, "yellow", *args) is None                       # half a file
+
+
+def test_two_stacks_on_one_domain_block_its_robots_none_only_warns():
+    blocked, txt = D.stack_problems({77: 2, 78: 0})
+    assert blocked == {77} and "2 robot stacks on domain 77" in txt and "no robot stack heard on domain 78" in txt
+    assert D.stack_problems({77: 1, 78: 1}) == (set(), "")
+    assert D.stack_problems({77: 0, 78: 1})[0] == set()
+
+
+def test_run_duo_start_clears_the_live_roles_and_passes_the_file():
+    src = open(os.path.join(REPO, "tools", "solo", "run_duo.sh")).read()
+    assert "rm -f $D/solo.cmd $D/duo_live.json" in src and "-p live_file:=$D/duo_live.json" in src
+    assert 'duo_att) KEEP="vo_m,vb_m,om"' in src and "--bot $BOT --keep" in src
+
+
+@pytest.mark.parametrize("rung,want", [("1", ["SOLO_BOT=duo_att", "run_duo.sh start yellow 1 3 false", '"a_nf": 2', "speed_cap:=1.5"]),
+                                       ("2", ["SOLO_BOT=duo_nk", "run_duo.sh start yellow 1 3 false", '"lu_on": 1', '"nk_oa": 0.15']),
+                                       ("3", ["SOLO_ROBOT_INDEX=1", "SOLO_OWN_COUNT=16", "run_real.sh start yellow false", '"lu_on": 1',
+                                              "recover:=true"])])
+def test_run_rung_picks_the_set_up_by_one_number(rung, want):
+    import subprocess
+    out = subprocess.run(["bash", os.path.join(REPO, "tools", "solo", "run_rung.sh"), "show", rung, "yellow", "1", "3"],
+                         capture_output=True, text=True, timeout=10).stdout
+    for w in want:
+        assert w in out, (w, out)
+    assert ("duo_att" in out) == (rung == "1")
+
+
+def test_profiles_are_the_field_profile_and_the_duo_att_pick():
+    import json
+    prof = os.path.join(REPO, "tools", "solo", "profiles")
+    field = json.load(open(os.path.join(prof, "field.json")))
+    assert field == {"lu_on": 1, "lu_keeper": 1, "nk_rd": 0, "nk_aim": 0, "nk_m": 0.3, "nk_still": 0.5, "nk_od": 0.3, "nk_ko_shot": 2.5,
+                     "nk_ko_rel": 1.2, "sp_wait": 2, "nk_sp_lo": -9, "nk_post": 0.28, "nk_oa": 0.15, "nk_da_run": 0.18, "nk_hold": 2.0}
+    att = json.load(open(os.path.join(prof, "duo_att.json")))
+    assert att["a_nf"] == 2 and att["a_nfv"] > 0 and "d_role" not in att
