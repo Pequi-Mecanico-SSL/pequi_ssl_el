@@ -233,12 +233,19 @@ class Drive(Node):
     # ---- subscriptions ----
 
     def on_cmd_vel(self, msg):
-        self.target = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        target = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        if not np.all(np.isfinite(target)):
+            self.get_logger().error(f'cmd_vel not finite, ignored: {target}', throttle_duration_sec=1.0)
+            return
+        self.target = target
         self.cmd_time = time.monotonic()
 
     def on_wheel_cmd(self, msg):
-        vals = (list(msg.data) + [0.0] * self.n)[:self.n]
-        self.wheel_cmd = np.array(vals, float)
+        vals = np.array((list(msg.data) + [0.0] * self.n)[:self.n], float)
+        if not np.all(np.isfinite(vals)):
+            self.get_logger().error(f'wheels/cmd not finite, ignored: {vals}', throttle_duration_sec=1.0)
+            return
+        self.wheel_cmd = vals
         self.wheel_cmd_time = time.monotonic()
 
     def on_estop(self, _):
