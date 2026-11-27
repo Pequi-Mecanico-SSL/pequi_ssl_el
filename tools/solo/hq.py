@@ -270,7 +270,15 @@ def strategy_on():
     return True, ""
 STRAT = ["on" if strategy_procs() else ("off" if os.path.exists(CMDF) else "not started")]
 
-rclpy.init(); node = Node("solo_hq")
+def _stop_signal(signum, frame):
+    raise KeyboardInterrupt
+try:                                                     # without rclpy's signal handlers: they shut the context down
+    from rclpy.signals import SignalHandlerOptions       # before main()'s final zeros could be published
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _stop_signal); signal.signal(signal.SIGTERM, _stop_signal)
+except ImportError:
+    rclpy.init()
+node = Node("solo_hq")
 pub = node.create_publisher(Twist, os.environ.get("SOLO_CMD_TOPIC", "/cmd_vel"), qos_profile_sensor_data)
 def on_us(m):
     with LOCK: S["us"], S["us_t"] = (m.x, m.y, m.theta), now()
