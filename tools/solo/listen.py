@@ -1,6 +1,9 @@
 """Is the field network there? Listens 5 s for vision and referee multicast on the given interface addresses.
-    python3 tools/solo/listen.py $(ip -4 -br addr | awk '{print $3}' | cut -d/ -f1)
-The league's standard groups are joined on the given addresses. Additional groups (e.g. a simulator on its own
+    python3 tools/solo/listen.py [address ...]
+The league's standard groups are joined on the given addresses (a switch that snoops multicast sends a group only to
+ports that joined it, so "nothing in 5 s" means nothing only for the addresses joined: the first line printed says
+which). Without an address: SOLO_IFACE if it is set; otherwise the tool lists this machine's addresses and asks, or,
+when it cannot ask (no terminal), joins on all of them. An address this machine does not have is asked about the same way. Additional groups (e.g. a simulator on its own
 addresses) come from SOLO_EXTRA_GROUPS="name=addr:port,..." (empty by default) and are listed separately: joined on
 the given addresses and, if SOLO_EXTRA_IFACE names an interface, on its address too, with the interface each packet
 came in on."""
@@ -11,7 +14,31 @@ EXTRA = [(a.strip().rsplit(":", 1)[0], int(a.strip().rsplit(":", 1)[1]), n.strip
          for n, a in (e.split("=", 1) for e in os.environ.get("SOLO_EXTRA_GROUPS", "").split(",") if e.strip())]
 EXTRA_IFACE = os.environ.get("SOLO_EXTRA_IFACE", "")
 IP_PKTINFO = getattr(socket, "IP_PKTINFO", 8)
-ifaces = sys.argv[1:]
+def own_addresses():
+    out = subprocess.run(["ip", "-4", "-br", "addr"], capture_output=True, text=True).stdout.splitlines()
+    return [(l.split()[0], x.split("/")[0]) for l in out for x in l.split()[2:] if not x.startswith("127.")]
+
+def choose(given):
+    """the addresses to join on: the given ones if this machine has them; else SOLO_IFACE; else ask (or all, with no terminal)"""
+    own = own_addresses(); have = [ip for _, ip in own]
+    bad = [ip for ip in given if ip not in have]
+    if given and not bad:
+        return given
+    env = os.environ.get("SOLO_IFACE", "")
+    if not given and env in have:
+        print(f"no address given: joining on SOLO_IFACE {env}"); return [env]
+    print(("not an address of this machine: " + " ".join(bad)) if bad else
+          ("no address given" + (f" and SOLO_IFACE {env} is not an address of this machine" if env else " and SOLO_IFACE is not set")))
+    print("this machine has: " + ", ".join(f"{ip} ({name})" for name, ip in own))
+    if sys.stdin.isatty():
+        ans = input("join on which address(es)? [Enter = all of them] ").replace(",", " ").split()
+        wrong = [ip for ip in ans if ip not in have]
+        if wrong: sys.exit("not an address of this machine: " + " ".join(wrong))
+        return ans or have
+    print("cannot ask (no terminal): joining on all of them"); return have
+
+ifaces = choose(sys.argv[1:])
+print("joined on: " + " ".join(ifaces))
 extra_if = [l.split()[2].split("/")[0] for l in subprocess.run(["ip", "-4", "-br", "addr", "show", EXTRA_IFACE], capture_output=True,
                                                                  text=True).stdout.splitlines() if len(l.split()) > 2] if EXTRA_IFACE else []
 socks = []

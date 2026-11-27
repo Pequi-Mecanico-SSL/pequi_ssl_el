@@ -45,7 +45,7 @@ Usual start sequence:
 export SOLO_SIM_DIR=<simulator checkout>  ROBOT=<user>@<robot address>  SSHPASS=<password>
 export SOLO_IFACE=<this computer's address on the robot's network>      # when it has several interfaces
 source tools/solo/env.sh
-python3 tools/solo/listen.py $(ip -4 -br addr | awk '{print $3}' | cut -d/ -f1)   # vision and game controller packets arrive
+python3 tools/solo/listen.py            # vision and game controller packets arrive (joins on SOLO_IFACE; asks if it has no address to join on)
 tools/solo/robot_stack.sh start                 # the robot's control stack (enables the motors)
 tools/solo/run_real.sh start <blue|yellow>      # policy server, vision, referee, strategy node
 tools/solo/run_real.sh status
