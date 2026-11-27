@@ -10,3 +10,17 @@ kinematics:
     wheel_angles_deg: [61.4, -59.1, 180.9]
     robot_radius: [0.0763, 0.0740, 0.0822]
     wheel_radius: [0.02283, 0.02222, 0.02349]
+
+drive:
+  ros__parameters:
+    # geometry, slip and friction fitted on the field carpet with the overhead camera (2026-11-26)
+    wheel_angles_deg: [60.93, -61.73, 179.68]
+    robot_radius: [0.0842, 0.0830, 0.0833]
+    wheel_radius: [0.02434, 0.02410, 0.02405]
+    oblique_loss: [0.158, 0.184, 0.129]
+    creep: [0.060, 0.064, 0.046]
+    mass: 1.6
+    inertia: 0.0062
+    roller_friction: [1.17, 1.16, 1.41]
+    rolling_current: [0.30, 0.33, 0.26]
+    current_limit_a: 3.0
