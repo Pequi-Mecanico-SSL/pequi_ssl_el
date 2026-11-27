@@ -2,7 +2,8 @@
 can_bridge:
   ros__parameters:
     n_motors: 3
-    current_limit_a: 3.0
+    # peak; ESC firmware 10 brings it down to 3 A when the 10 s mean current gets there
+    current_limit_a: 5.0
 
 kinematics:
   ros__parameters:

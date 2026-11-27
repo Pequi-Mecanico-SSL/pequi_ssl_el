@@ -37,6 +37,9 @@ ID_ESTOP, ID_SETPOINT, ID_CMD, ID_TLM, ID_DIAG, ID_HELLO, ID_STAT = (
  OP_TELEM, OP_TERM, OP_PING, OP_WATCHDOG, OP_GAIN, OP_DIAG) = range(11)
 GAIN_VEL_KP, GAIN_VEL_KI = 0, 1
 FLAG_ENABLED, FLAG_READY, FLAG_WD_TRIPPED, FLAG_FAULT = 1, 2, 4, 8
+FLAG_LIMITED = 0x40    # firmware 10: Iq limit lowered while the windings are warm
+GUARD_FW = 10          # first firmware that guards the windings; older ones get at most CONTINUOUS_A
+CONTINUOUS_A = 3.0
 FAULTS = ('none', 'encoder', 'overcurrent', 'undervoltage', 'overvoltage',
           'not calibrated', 'current sense', 'angle (reversed torque: calibrate)')
 POS_TO_RAD = 2 * math.pi / 4096
@@ -155,14 +158,25 @@ class CanBridge(Node):
         self.send_cmd(i, OP_TELEM, struct.pack('<H', self.telemetry_period_ms))
         self.send_cmd(i, OP_WATCHDOG, struct.pack('<H', self.watchdog_ms))
         self.send_cmd(i, OP_DIAG, struct.pack('<H', self.diag_period_ms))
-        if self.current_limit > 0:
-            self.send_cmd(i, OP_CURLIM, struct.pack('<f', self.current_limit))
+        self.send_current_limit(i)
         for idx, val in ((GAIN_VEL_KP, self.vel_pid_kp),
                          (GAIN_VEL_KI, self.vel_pid_ki)):
             if val > 0:
                 self.send_cmd(i, OP_GAIN, struct.pack('<Bf', idx, val))
         if not self.estopped:
             self.send_cmd(i, OP_ENABLE)
+
+    def send_current_limit(self, i):
+        if self.current_limit <= 0:
+            return
+        limit = self.current_limit
+        fw = self.hello.get(i, (None, None))[1]
+        if limit > CONTINUOUS_A and (fw is None or fw < GUARD_FW):
+            limit = CONTINUOUS_A
+            if fw is not None:
+                self.get_logger().warning(f'motor {i}: firmware {fw} does not guard the windings, '
+                                          f'current limit {limit:g} A instead of {self.current_limit:g} A')
+        self.send_cmd(i, OP_CURLIM, struct.pack('<f', limit))
 
     def send_setpoints(self, targets):
         ints = [max(-32767, min(32767, round(v * 100))) for v in targets]
@@ -291,8 +305,9 @@ class CanBridge(Node):
                       f"{'calibrated' if fl & 2 else 'NOT CALIBRATED'}, "
                       f"encoder {'ok' if fl & 4 else 'MISSING'}")
             if not known and self.seconds_since(self.start_time) < 2.0:
-                # answer to our ping at startup: already configured
+                # answer to our ping at startup: configured, but for the limit that depends on the firmware
                 self.get_logger().info(f'motor {mid}: uid=0x{uid:08X} fw={fw}, {status}')
+                self.send_current_limit(mid)
                 return
             self.get_logger().warning(
                 f'motor {mid} booted (uid=0x{uid:08X} fw={fw}, {status}), configuring')
@@ -388,6 +403,8 @@ class CanBridge(Node):
                 problems.append((WARN, 'watchdog tripped'))
             elif not flags & FLAG_ENABLED:
                 problems.append((WARN, 'disabled'))
+            elif flags & FLAG_LIMITED:
+                problems.append((WARN, 'current limit lowered: windings warm'))
             values += [('enabled', bool(flags & FLAG_ENABLED)),
                        ('fault', FAULTS[fault] if fault < len(FAULTS) else fault),
                        ('velocity (rad/s)', f'{vel:.2f}'),
