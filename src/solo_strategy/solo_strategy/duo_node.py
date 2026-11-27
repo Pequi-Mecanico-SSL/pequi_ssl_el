@@ -201,9 +201,12 @@ class DuoNode(Node):
         for dom, node in self.cmd_node.values():
             counts[dom] = node.count_publishers(self.stack_topic)
         blocked, note = stack_problems(counts)
-        if counts != self.stacks:
-            (self.get_logger().error if blocked else self.get_logger().info)(
-                f"robot stacks ({self.stack_topic} publishers) per domain: {counts}" + (f"; {note}" if note else ''))
+        if counts != self.stacks:               # one call site per severity: rclpy refuses to change it at one site
+            line = f"robot stacks ({self.stack_topic} publishers) per domain: {counts}" + (f"; {note}" if note else '')
+            if blocked:
+                self.get_logger().error(line)
+            else:
+                self.get_logger().info(line)
         self.stacks, self.blocked, self.stack_note = counts, blocked, note
 
     def now(self):
