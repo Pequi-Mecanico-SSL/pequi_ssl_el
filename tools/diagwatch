@@ -1,0 +1,7 @@
+#!/bin/sh
+# Live view of the robots' /diagnostics on this machine: diagwatch [ROS domain ...]
+# (default 77 and 0). Runs tools/diagwatch.py in a ROS container on the host network.
+here=$(dirname "$(readlink -f "$0")")
+image=${DIAGWATCH_IMAGE:-pequi_ssl_el-bash}
+exec docker run --rm -it --network host --ipc host -v "$here/diagwatch.py:/diagwatch.py:ro" \
+    "$image" bash -c 'source /opt/ros/$ROS_DISTRO/setup.bash && exec python3 -u /diagwatch.py "$@"' diagwatch "$@"
