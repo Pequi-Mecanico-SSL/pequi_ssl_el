@@ -67,7 +67,7 @@ Ids are vision ids. `run_duo.sh` runs the policy server with `--bot duo_nk` (`d_
 program), the vision connector with our colour's count 16 (its topic number is then the vision id itself; with a
 smaller count it is a rank among the ids seen, which changes when a robot leaves the field) and `duo_node`, which
 reads both robots by id, asks the server once per tick for both, and refuses at start two robots on the same domain
-and topic. A robot benched (`bench`), carried beyond the field lines, or unseen for `gone_after` s (2) gets zero and
+and topic. A robot benched (`bench`), carried 0.45 m beyond the field lines, or unseen for `gone_after` s (2) gets zero and
 is off the field for the policy, so the other plays alone; an unseen robot gets zero after 0.5 s. `keeper` swaps the
 roles (tell the game controller the new goalkeeper id first). `run_real.sh stop` and `run_duo.sh stop` stop either
 setup (same run folder). The laptop recorder (`record_robot.py --laptop`) also records the node's copy of each

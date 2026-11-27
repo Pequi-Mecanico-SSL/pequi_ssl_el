@@ -52,7 +52,7 @@ def test_benched_wins_over_everything():
     assert v.status == D.BENCHED and not v.present and not v.drives
 
 
-@pytest.mark.parametrize("x,y,off", [(2.4, 0.0, False), (2.6, 0.0, True), (0.0, -1.7, False), (0.0, 1.8, True), (-2.6, 1.0, True)])
+@pytest.mark.parametrize("x,y,off", [(2.6, 0.0, False), (2.75, 0.0, True), (0.0, -1.9, False), (0.0, 2.0, True), (-2.8, 1.0, True)])
 def test_a_robot_carried_beyond_the_lines_is_off_the_field(x, y, off):
     r = D.Robot(1); seen(r, 0.0, 0.5, x=x, y=y)
     assert (r.view(0.5, LIM).status == D.OFF_FIELD) == off

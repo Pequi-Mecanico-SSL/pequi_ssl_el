@@ -71,7 +71,7 @@ class DuoNode(Node):
         d('team', 'blue'); d('ids', [0, 1]); d('keeper', -1); d('domains', [-1, -1]); d('cmd_topics', ['/cmd_vel', '/cmd_vel'])
         d('speed_caps', [0.0]); d('bench', [-1])
         d('rate_hz', 30.0); d('pose_timeout', 0.2); d('latency', 0.1)
-        d('predict', True); d('blind_slow', 0.25); d('blind_limit', 0.5); d('blind_floor', 0.4); d('gone_after', 2.0); d('off_margin', 0.25)
+        d('predict', True); d('blind_slow', 0.25); d('blind_limit', 0.5); d('blind_floor', 0.4); d('gone_after', 2.0); d('off_margin', 0.45)
         d('pred_after', 0.05); d('pred_delay', 0.1); d('pred_accel', 3.0); d('pred_vel_mix', 0.5); d('opp_hold', 0.5)
         d('pred_policy_vel', 'model')
         d('speed_cap', 1.0); d('angular_cap', 4.0); d('ramp_fwd', 1.7); d('ramp_side', 1.5); d('side', 'auto'); d('force_state', '')

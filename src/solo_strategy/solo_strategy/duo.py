@@ -29,7 +29,7 @@ class Limits:
     blind_limit: float = 0.5
     blind_floor: float = 0.4
     gone_after: float = 2.0
-    off_margin: float = 0.25
+    off_margin: float = 0.45
     half_length: float = 2.25
     half_width: float = 1.5
     pred_policy_vel: str = 'model'
