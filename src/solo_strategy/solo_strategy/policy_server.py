@@ -229,12 +229,14 @@ TEAM = TEAM_SIZE > 1                       # a team bot: the requests name sever
 if TEAM:
     Q0 = {**Q0, "us": [Q0["us"], [-0.5, 0.3, 0.0, 0.0, 0.0, 1]]}
 STEP = step_team if TEAM else step
+WARM = (Q0, {**Q0, "state": int(GS.STOP), "next": [int(Next.FREE_KICK), 0, -1.0, 1.0]},
+        {**Q0, "state": int(GS.STOP)},                                                    # a stop with no restart named
+        {**Q0, "state": int(GS.BALL_PLACEMENT), "place": [-0.5, -0.4]}, {**Q0, "state": int(GS.FREE_KICK), "ours": True})
+for wq in WARM:                         # each call also with the start memory: the loop starts from mem0, and a first stop
+    STEP(wq, mem0)                      # before any play step would otherwise compile for it then (about 20 s)
 for _ in range(3):                                              # the same calls the loop makes, until nothing recompiles
-    _, m = STEP(Q0, m)
-    _, m = STEP({**Q0, "state": int(GS.STOP), "next": [int(Next.FREE_KICK), 0, -1.0, 1.0]}, m)
-    _, m = STEP({**Q0, "state": int(GS.STOP)}, m)                                         # a stop with no restart named
-    _, m = STEP({**Q0, "state": int(GS.BALL_PLACEMENT), "place": [-0.5, -0.4]}, m)
-    _, m = STEP({**Q0, "state": int(GS.FREE_KICK), "ours": True}, m)
+    for wq in WARM:
+        _, m = STEP(wq, m)
 t1 = time.perf_counter(); STEP(Q0, m); warm_ms = (time.perf_counter() - t1) * 1000
 print(f"compiled in {time.time() - t0:.0f} s (a step now takes {warm_ms:.1f} ms); field {G.field_length} x {G.field_width} m; "
       f"listening on 127.0.0.1:{args.port}", flush=True)
