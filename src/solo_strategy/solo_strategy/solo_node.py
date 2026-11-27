@@ -296,6 +296,10 @@ class SoloNode(Node):
             return dict(mode='policy server does not answer: standing still', t=round(now, 2), state=state)
         # attack frame -> field frame -> body frame, capped
         vfx, vfy, w = sx * r['v'][0], r['v'][1], (-r['w'] if mirror else r['w'])
+        if not all(math.isfinite(v) for v in (vfx, vfy, w, th, scale)):
+            # the caps and the ramp below would turn a NaN into a finite command that grows every tick
+            self.last_w = 0.0
+            return dict(mode='non-finite policy answer or pose: standing still', t=round(now, 2), state=state)
         sp, cap = math.hypot(vfx, vfy), self.speed_cap * scale
         if sp > cap:
             vfx, vfy = vfx * cap / sp, vfy * cap / sp
