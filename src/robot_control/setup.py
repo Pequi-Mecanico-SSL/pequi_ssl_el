@@ -29,6 +29,7 @@ setup(
             'velocity_controller = robot_control.velocity_controller:main',
             'teleop = robot_control.teleop:main',
             'imu = robot_control.imu:main',
+            'drive = robot_control.drive:main',
             'robot_pid = robot_control.robot_pid:main',
             'wheel_pid = robot_control.wheel_pid:main'
         ],
