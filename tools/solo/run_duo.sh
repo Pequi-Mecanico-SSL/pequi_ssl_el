@@ -37,6 +37,9 @@ start)
   # duo_nk plays both robots from one program only with d_role -1 (the team); any other value is refused
   PARAMS=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); assert p.get("d_role",-1)==-1, "d_role must be -1 (the team) for run_duo.sh"; p["d_role"]=-1; print(json.dumps(p))' "$PARAMS") || { echo "REFUSED: policy params"; exit 1; }
   stop; sleep 0.5
+  # a node command line the page saved in an earlier set-up (a one-robot solo_node line, other ids) must not be what
+  # its STRATEGY button starts in this one: the page saves this node's line when it switches it off
+  rm -f $D/solo.cmd
   OTHER=$([ "$TEAM" = blue ] && echo yellow || echo blue)
   (A=${SOLO_ARENA:-$SIM}; cd $A && PYTHONPATH=$A/src:$A/ssl-rules/src JAX_PLATFORMS=cpu nohup $SIM/.venv/bin/python ${SOLO_SRC:-$REPO/src}/solo_strategy/solo_strategy/policy_server.py --bot duo_nk --params "$PARAMS" > $D/policy.log 2>&1 & echo $! > $D/policy.pid)
   # our colour's count 16: the connector's topic number is then the vision id itself (duo_node reads robot<id>)
