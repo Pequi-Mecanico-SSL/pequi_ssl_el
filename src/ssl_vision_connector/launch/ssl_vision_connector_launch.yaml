@@ -20,6 +20,10 @@ launch:
     name: "mirror"
     # true = correct our mirrored real-camera calibration; false for grSim
     default: "true"
+- arg:
+    # address of the interface to join the multicast group on (0.0.0.0 = default route; a simulator on its own docker network: that network's host address)
+    name: "vision_iface"
+    default: "0.0.0.0"
 
 - node:
     pkg: "ssl_vision_connector"
@@ -44,3 +48,6 @@ launch:
     -
         name: mirror
         value: $(var mirror)
+    -
+        name: vision_iface
+        value: $(var vision_iface)

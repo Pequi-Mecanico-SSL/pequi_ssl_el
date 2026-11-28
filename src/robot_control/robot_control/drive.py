@@ -19,6 +19,7 @@ Topics:
   cmd_vel_ref    (Twist, out)             the velocity being commanded to the wheels
   /diagnostics   (DiagnosticArray, out)   once a second: each motor (state, fault, bus voltage, board temperature,
                                           encoder), the bus (battery, estop, CAN errors), the control loop
+The outputs are best effort, except /diagnostics.
 """
 import collections
 import math
@@ -178,10 +179,11 @@ class Drive(Node):
             self.log.write('t,tx,ty,tw,rx,ry,rw,ax,ay,aw,ex,ey,ew,gz,bias,herr,px,py,pth,accx,accy,'
                            f'{w("sp")},{w("ff")},{w("v")},{w("i")},{w("p")}\n')
 
-        self.state_pub = self.create_publisher(JointState, 'wheels/state', 10)
-        self.imu_pub = self.create_publisher(Imu, 'imu', 10)
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
-        self.ref_pub = self.create_publisher(Twist, 'cmd_vel_ref', 10)
+        # telemetry best effort: a sample lost on the Wi-Fi is not sent again
+        self.state_pub = self.create_publisher(JointState, 'wheels/state', qos_profile_sensor_data)
+        self.imu_pub = self.create_publisher(Imu, 'imu', qos_profile_sensor_data)
+        self.odom_pub = self.create_publisher(Odometry, 'odom', qos_profile_sensor_data)
+        self.ref_pub = self.create_publisher(Twist, 'cmd_vel_ref', qos_profile_sensor_data)
         self.diag_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
         # best effort: a command lost on the Wi-Fi is dropped, never delivered late
         self.create_subscription(Twist, 'cmd_vel', self.on_cmd_vel, qos_profile_sensor_data)
@@ -274,12 +276,19 @@ class Drive(Node):
     # ---- subscriptions ----
 
     def on_cmd_vel(self, msg):
-        self.target = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        target = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        if not np.all(np.isfinite(target)):
+            self.get_logger().error(f'cmd_vel not finite, ignored: {target}', throttle_duration_sec=1.0)
+            return
+        self.target = target
         self.cmd_time = time.monotonic()
 
     def on_wheel_cmd(self, msg):
-        vals = (list(msg.data) + [0.0] * self.n)[:self.n]
-        self.wheel_cmd = np.array(vals, float)
+        vals = np.array((list(msg.data) + [0.0] * self.n)[:self.n], float)
+        if not np.all(np.isfinite(vals)):
+            self.get_logger().error(f'wheels/cmd not finite, ignored: {vals}', throttle_duration_sec=1.0)
+            return
+        self.wheel_cmd = vals
         self.wheel_cmd_time = time.monotonic()
 
     def on_estop(self, _):
@@ -451,8 +460,12 @@ class Drive(Node):
             problems.append((WARN, f'planning with {self.warm_limit:.1f} A: an ESC gives only its continuous current'))
         if self.late > self.dt:
             problems.append((WARN, f'control step {self.late * 1000:.0f} ms late'))
+        imu = self.imu
         msg.status.append(make_status('drive: control', '', problems, (
             ('gyro bias (rad/s)', f'{self.gyro_bias:+.4f}'),
+            ('gyro stalls', imu.stuck if imu else '-'),
+            ('gyro configuration rewrites', imu.reconfigured if imu else '-'),
+            ('IMU bus errors', imu.errors if imu else '-'),
             ('planned current limit (A)', f'{self.ref.budget:.1f}'),
             ('latest step lateness (ms)', f'{self.late * 1000:.1f}'))))
         self.diag_pub.publish(msg)
