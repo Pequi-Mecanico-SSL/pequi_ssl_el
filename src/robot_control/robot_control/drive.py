@@ -7,7 +7,8 @@ the robot's model (drive_model.py). The ESCs keep their own velocity loops and
 correct what the model misses. A motor that runs against its command (reversed
 torque: stale encoder calibration, swapped phase wires) stops all of them.
 
-Topics:
+Topics, relative to the node's namespace: on a robot the launch file puts it in /robot<id>
+(/robot1/cmd_vel), and the namespace marks its diagnostics and frames (robot1/drive: bus, robot1/odom):
   cmd_vel        (Twist, in)              body velocity, m/s and rad/s, held constant over the ground until
                                           the next one; without a fresh one the robot brakes
   wheels/cmd     (Float32MultiArray, in)  raw wheel speeds, rad/s, for bench tests; overrides cmd_vel while it streams
@@ -133,7 +134,9 @@ class Drive(Node):
 
         self.iface = p('can_interface')
         self.bus = EscBus(self.iface)
-        self.monitor = EscMonitor(self.n, 'drive', float(p('tracking_error_rad_s')), float(p('tracking_timeout_s')),
+        namespace = self.get_namespace().strip('/')
+        self.prefix = namespace + '/' if namespace else ''
+        self.monitor = EscMonitor(self.n, self.prefix + 'drive', float(p('tracking_error_rad_s')), float(p('tracking_timeout_s')),
                                   float(p('battery_warn_v')), float(p('battery_error_v')),
                                   float(p('temp_warn_c')), float(p('temp_error_c')),
                                   int(p('diag_period_ms')) / 1000.0)
@@ -416,7 +419,7 @@ class Drive(Node):
         stamp = self.get_clock().now().to_msg()
         if gyro is not None:
             m = Imu()
-            m.header.stamp, m.header.frame_id = stamp, 'imu'
+            m.header.stamp, m.header.frame_id = stamp, self.prefix + 'imu'
             m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z = gyro
             m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z = accel
             self.imu_pub.publish(m)
@@ -431,7 +434,7 @@ class Drive(Node):
             self.state_pub.publish(m)
 
             o = Odometry()
-            o.header.stamp, o.header.frame_id, o.child_frame_id = stamp, 'odom', 'base_link'
+            o.header.stamp, o.header.frame_id, o.child_frame_id = stamp, self.prefix + 'odom', self.prefix + 'base_link'
             o.pose.pose.position.x, o.pose.pose.position.y = float(self.pose[0]), float(self.pose[1])
             o.pose.pose.orientation.z = math.sin(self.pose[2] / 2)
             o.pose.pose.orientation.w = math.cos(self.pose[2] / 2)
@@ -461,7 +464,7 @@ class Drive(Node):
         if self.late > self.dt:
             problems.append((WARN, f'control step {self.late * 1000:.0f} ms late'))
         imu = self.imu
-        msg.status.append(make_status('drive: control', '', problems, (
+        msg.status.append(make_status(self.prefix + 'drive: control', '', problems, (
             ('gyro bias (rad/s)', f'{self.gyro_bias:+.4f}'),
             ('gyro stalls', imu.stuck if imu else '-'),
             ('gyro configuration rewrites', imu.reconfigured if imu else '-'),

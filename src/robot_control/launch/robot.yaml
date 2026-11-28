@@ -1,5 +1,10 @@
 launch:
 
+# the robot's number: its nodes and topics live in /robot<id> (/robot1/cmd_vel, /robot1/odom, ...)
+- arg:
+    name: "robot_id"
+    default: "$(env ROBOT_ID)"
+
 # robot model: wheel layout, friction, limits
 - arg:
     name: "config"
@@ -9,6 +14,7 @@ launch:
     pkg: "robot_control"
     exec: "drive"
     name: "drive"
+    namespace: "robot$(var robot_id)"
     param:
     -
         from: "$(var config)"
@@ -22,6 +28,7 @@ launch:
     pkg: "robot_control"
     exec: "teleop"
     name: "teleop"
+    namespace: "robot$(var robot_id)"
     param:
     -
         from: "$(var config)"

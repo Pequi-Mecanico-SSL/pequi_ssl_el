@@ -25,6 +25,7 @@ services:
     environment:
       - DISPLAY=:0.0
       - SDL_AUDIODRIVER=dsp
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-77}
 
   pong:
     container_name: ssl_pong
@@ -46,7 +47,7 @@ services:
       dockerfile: Dockerfile.arm64
     # clean build: a power cut mid-write can leave truncated files in
     # build/install that incremental builds never repair (mtime-based skip)
-    command: bash -lc 'rm -rf /ssl_ws/build /ssl_ws/install && colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
+    command: bash -lc 'echo "robot $${ROBOT_ID:?set ROBOT_ID in .env}" && rm -rf /ssl_ws/build /ssl_ws/install && colcon build --packages-select robot_control && ros2 launch robot_control robot.yaml'
     network_mode: host
     ipc: host
     volumes:
@@ -55,6 +56,9 @@ services:
     environment:
       # I2C bus of the IMU: 1 on the Raspberry Pi 4, 0 on the Orange Pi 4 Pro (set in .env)
       - IMU_I2C_BUS=${IMU_I2C_BUS:-1}
+      # the robot's number, set in .env: its topics are /robot<ROBOT_ID>/...
+      - ROBOT_ID=${ROBOT_ID:-}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-77}
   
   simulator:
     container_name: ssl_simulator

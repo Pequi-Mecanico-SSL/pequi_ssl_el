@@ -1,8 +1,9 @@
 """Live view of /diagnostics in the terminal: diagwatch.py [domain ...]
 
-Subscribes on every ROS domain given (default 77 and 0) and redraws in place.
-The motor and bus statuses of the node that drives the ESCs (drive, or can_bridge of the old
-stack) get a motor table and a bus line; any other status is listed with its values. Run it through tools/diagwatch.
+Subscribes on every ROS domain given (default 77 and 0) and redraws in place, one block per robot
+(the part of a status name before the last "/": robot1/drive: bus). The motor and bus statuses of
+the node that drives the ESCs (drive, or can_bridge of the old stack) get a motor table and a bus
+line; any other status is listed with its values. Run it through tools/diagwatch.
 """
 import re
 import sys
@@ -51,6 +52,19 @@ def render(domain, statuses, age):
     head = f'domain {domain}  /diagnostics  ' + (
         paint(f'no message for {age:.0f} s', '31;1') if old else f'{age:.1f} s ago')
     lines = [paint(head, '1'), '']
+    robots = {}
+    for name, s in statuses.items():
+        robot, _, rest = name.rpartition('/')
+        robots.setdefault(robot, {})[rest] = s
+    for robot, own in sorted(robots.items()):
+        if robot:
+            lines.append(paint(robot, '1'))
+        lines += render_robot(own) + ['']
+    return lines[:-1]
+
+
+def render_robot(statuses):
+    lines = []
     motors = sorted((int(m.group(1)), s) for name, s in statuses.items()
                     if (m := MOTOR_STATUS.match(name)))
     bus = next((s for name, s in statuses.items() if BUS_STATUS.match(name)), None)

@@ -1,18 +1,19 @@
 # 3-wheel robot, wheels 120 degrees apart. Motor ids: 0 front-left, 1 front-right, 2 back.
-can_bridge:
+# "/**/<node>": the node in any namespace (a bare node name is not found inside /robot<id>).
+"/**/can_bridge":
   ros__parameters:
     n_motors: 3
     # peak; ESC firmware 10 brings it down to 3 A when the 10 s mean current gets there
     current_limit_a: 5.0
 
-kinematics:
+"/**/kinematics":
   ros__parameters:
     # calibrated with the overhead camera (2026-11-25)
     wheel_angles_deg: [61.4, -59.1, 180.9]
     robot_radius: [0.0763, 0.0740, 0.0822]
     wheel_radius: [0.02283, 0.02222, 0.02349]
 
-drive:
+"/**/drive":
   ros__parameters:
     # geometry, slip and friction fitted on the field carpet with the overhead camera (2026-11-26)
     wheel_angles_deg: [60.93, -61.73, 179.68]
