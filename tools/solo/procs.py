@@ -17,7 +17,7 @@ auto_session.py and place_ball.py (standard library only, Linux /proc).
 import os, re
 
 COMMANDERS = ("solo_node", "duo_node", "duo_check.py", "characterize.py", "series.py", "ram_series.py", "place_ball.py", "goto.py", "nudge.py",
-              "frame_check.py")
+              "frame_check.py", "spinkick.py")
 
 # the parameters solo_strategy/solo_node.py declares (tests/test_procs.py compares this with the node's source)
 NODE_PARAMS = frozenset((
